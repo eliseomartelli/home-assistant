@@ -62,25 +62,33 @@ async def async_setup(hass, config):
 class GoogleHomeClient:
     """Handle all communication with the Google Home unit."""
 
-    def __init__(self, hass):
+    def __init__(self, hass, host):
         """Initialize the Google Home Client."""
         self.hass = hass
         self._connected = None
+        self._host = host
 
-    async def update_data(self, host):
-        """Update data from Google Home."""
+    async def update_info(self):
+        """Update info from Google Home."""
         from googledevices.api.connect import Cast
-        _LOGGER.debug("Updating Google Home data for %s", host)
+        _LOGGER.debug("Updating Google Home data for %s", self._host)
         session = async_get_clientsession(self.hass)
 
-        device_info = await Cast(host, self.hass.loop, session).info()
+        device_info = await Cast(self._host, self.hass.loop, session).info()
         device_info_data = await device_info.get_device_info()
         self._connected = bool(device_info_data)
 
-        bluetooth = await Cast(host, self.hass.loop, session).bluetooth()
+        self.hass.data[DOMAIN][self._host]['info'] = device_info_data
+
+    async def update_bluetooth(self):
+        """Update bluetooth from Google Home."""
+        from googledevices.api.connect import Cast
+        _LOGGER.debug("Updating Google Home data for %s", self._host)
+        session = async_get_clientsession(self.hass)
+
+        bluetooth = await Cast(self._host, self.hass.loop, session).bluetooth()
         await bluetooth.scan_for_devices()
         await asyncio.sleep(5)
         bluetooth_data = await bluetooth.get_scan_result()
 
-        self.hass.data[DOMAIN][host]['info'] = device_info_data
-        self.hass.data[DOMAIN][host]['bluetooth'] = bluetooth_data
+        self.hass.data[DOMAIN][self._host]['bluetooth'] = bluetooth_data
