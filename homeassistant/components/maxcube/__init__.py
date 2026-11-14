@@ -1,15 +1,18 @@
 """Support for the MAX! Cube LAN Gateway."""
+
 import logging
-from socket import timeout
 from threading import Lock
 import time
 
 from maxcube.cube import MaxCube
-import voluptuous as vol
+import probatio
 
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL
-import homeassistant.helpers.config_validation as cv
+from homeassistant.components import persistent_notification
+from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SCAN_INTERVAL, Platform
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.discovery import load_platform
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.dt import now
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,29 +27,29 @@ NOTIFICATION_TITLE = "Max!Cube gateway setup"
 
 CONF_GATEWAYS = "gateways"
 
-CONFIG_GATEWAY = vol.Schema(
+CONFIG_GATEWAY = probatio.Schema(
     {
-        vol.Required(CONF_HOST): cv.string,
-        vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Optional(CONF_SCAN_INTERVAL, default=300): cv.time_period,
+        probatio.Required(CONF_HOST): cv.string,
+        probatio.Optional(CONF_PORT, default=DEFAULT_PORT): probatio.Port(),
+        probatio.Optional(CONF_SCAN_INTERVAL, default=300): cv.time_period,
     }
 )
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Required(CONF_GATEWAYS, default={}): vol.All(
-                    cv.ensure_list, [CONFIG_GATEWAY]
+                probatio.Required(CONF_GATEWAYS, default={}): probatio.All(
+                    probatio.EnsureList(), [CONFIG_GATEWAY]
                 )
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 
-def setup(hass, config):
+def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Establish connection to MAX! Cube."""
 
     if DATA_KEY not in hass.data:
@@ -62,10 +65,14 @@ def setup(hass, config):
         try:
             cube = MaxCube(host, port, now=now)
             hass.data[DATA_KEY][host] = MaxCubeHandle(cube, scan_interval)
-        except timeout as ex:
+        except TimeoutError as ex:
             _LOGGER.error("Unable to connect to Max!Cube gateway: %s", str(ex))
-            hass.components.persistent_notification.create(
-                f"Error: {ex}<br />You will need to restart Home Assistant after fixing.",
+            persistent_notification.create(
+                hass,
+                (
+                    f"Error: {ex}<br />You will need to restart Home Assistant after"
+                    " fixing."
+                ),
                 title=NOTIFICATION_TITLE,
                 notification_id=NOTIFICATION_ID,
             )
@@ -74,8 +81,8 @@ def setup(hass, config):
     if connection_failed >= len(gateways):
         return False
 
-    load_platform(hass, "climate", DOMAIN, {}, config)
-    load_platform(hass, "binary_sensor", DOMAIN, {}, config)
+    load_platform(hass, Platform.CLIMATE, DOMAIN, {}, config)
+    load_platform(hass, Platform.BINARY_SENSOR, DOMAIN, {}, config)
 
     return True
 
@@ -91,7 +98,7 @@ class MaxCubeHandle:
         self.mutex = Lock()
         self._updatets = time.monotonic()
 
-    def update(self):
+    def update(self) -> None:
         """Pull the latest data from the MAX! Cube."""
         # Acquire mutex to prevent simultaneous update from multiple threads
         with self.mutex:
@@ -101,9 +108,9 @@ class MaxCubeHandle:
 
                 try:
                     self.cube.update()
-                except timeout:
+                except TimeoutError:
                     _LOGGER.error("Max!Cube connection failed")
-                    return False
+                    return
 
                 self._updatets = time.monotonic()
             else:

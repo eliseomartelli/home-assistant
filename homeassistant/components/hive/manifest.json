@@ -1,14 +1,20 @@
 {
   "domain": "hive",
   "name": "Hive",
+  "categories": [
+    "climate.thermostats_heating",
+    "lighting.bulbs_lamps",
+    "plugs_switches"
+  ],
+  "codeowners": ["@Rendili", "@KJonline"],
   "config_flow": true,
+  "connectivity": ["cloud"],
   "documentation": "https://www.home-assistant.io/integrations/hive",
-  "requirements": [
-    "pyhiveapi==0.4.2"
-  ],
-  "codeowners": [
-    "@Rendili",
-    "@KJonline"
-  ],
-  "iot_class": "cloud_polling"
+  "homekit": {
+    "models": ["HHKBridge*"]
+  },
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "loggers": ["apyhiveapi"],
+  "requirements": ["pyhive-integration==1.0.10"]
 }

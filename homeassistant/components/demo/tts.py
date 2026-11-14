@@ -1,48 +1,39 @@
-"""Support for the demo for text to speech service."""
+"""Support for the demo for text-to-speech service."""
+
 import os
+from typing import Any, override
 
-import voluptuous as vol
-
-from homeassistant.components.tts import CONF_LANG, PLATFORM_SCHEMA, Provider
+from homeassistant.components.tts import TextToSpeechEntity, TtsAudioType
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 SUPPORT_LANGUAGES = ["en", "de"]
 
 DEFAULT_LANG = "en"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {vol.Optional(CONF_LANG, default=DEFAULT_LANG): vol.In(SUPPORT_LANGUAGES)}
-)
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Set up Demo speech platform via config entry."""
+    async_add_entities([DemoProviderEntity()])
 
 
-def get_engine(hass, config, discovery_info=None):
-    """Set up Demo speech component."""
-    return DemoProvider(config.get(CONF_LANG, DEFAULT_LANG))
+class DemoProviderEntity(TextToSpeechEntity):
+    """Demo speech API provider entity."""
 
+    _attr_name = "Demo TTS"
+    _attr_default_language = DEFAULT_LANG
+    _attr_supported_languages = SUPPORT_LANGUAGES
+    _attr_supported_options = ["voice", "age"]
 
-class DemoProvider(Provider):
-    """Demo speech API provider."""
-
-    def __init__(self, lang):
-        """Initialize demo provider."""
-        self._lang = lang
-        self.name = "Demo"
-
-    @property
-    def default_language(self):
-        """Return the default language."""
-        return self._lang
-
-    @property
-    def supported_languages(self):
-        """Return list of supported languages."""
-        return SUPPORT_LANGUAGES
-
-    @property
-    def supported_options(self):
-        """Return list of supported options like voice, emotionen."""
-        return ["voice", "age"]
-
-    def get_tts_audio(self, message, language, options=None):
+    @override
+    def get_tts_audio(
+        self, message: str, language: str, options: dict[str, Any]
+    ) -> TtsAudioType:
         """Load TTS from demo."""
         filename = os.path.join(os.path.dirname(__file__), "tts.mp3")
         try:

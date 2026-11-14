@@ -1,84 +1,58 @@
 """The Ridwell integration."""
-from __future__ import annotations
 
-import asyncio
-from datetime import timedelta
+from typing import Any
 
-from aioridwell import async_get_client
-from aioridwell.client import RidwellAccount, RidwellPickupEvent
-from aioridwell.errors import InvalidCredentialsError, RidwellError
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import aiohttp_client
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from .const import LOGGER, SENSOR_TYPE_NEXT_PICKUP
+from .coordinator import RidwellConfigEntry, RidwellDataUpdateCoordinator
 
-from .const import DATA_ACCOUNT, DATA_COORDINATOR, DOMAIN, LOGGER
-
-DEFAULT_UPDATE_INTERVAL = timedelta(hours=1)
-
-PLATFORMS: list[str] = ["sensor"]
+PLATFORMS: list[Platform] = [Platform.CALENDAR, Platform.SENSOR, Platform.SWITCH]
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: RidwellConfigEntry) -> None:
     """Set up Ridwell from a config entry."""
-    session = aiohttp_client.async_get_clientsession(hass)
+    coordinator = RidwellDataUpdateCoordinator(hass, entry)
+    await coordinator.async_initialize()
+    entry.runtime_data = coordinator
+    entry.async_on_unload(entry.add_update_listener(options_update_listener))
 
-    try:
-        client = await async_get_client(
-            entry.data[CONF_USERNAME], entry.data[CONF_PASSWORD], session=session
-        )
-    except InvalidCredentialsError as err:
-        raise ConfigEntryAuthFailed("Invalid username/password") from err
-    except RidwellError as err:
-        raise ConfigEntryNotReady(err) from err
-
-    accounts = await client.async_get_accounts()
-
-    async def async_update_data() -> dict[str, RidwellPickupEvent]:
-        """Get the latest pickup events."""
-        data = {}
-
-        async def async_get_pickups(account: RidwellAccount) -> None:
-            """Get the latest pickups for an account."""
-            data[account.account_id] = await account.async_get_next_pickup_event()
-
-        tasks = [async_get_pickups(account) for account in accounts.values()]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, InvalidCredentialsError):
-                raise ConfigEntryAuthFailed("Invalid username/password") from result
-            if isinstance(result, RidwellError):
-                raise UpdateFailed(result) from result
-
-        return data
-
-    coordinator = DataUpdateCoordinator(
-        hass,
-        LOGGER,
-        name=entry.title,
-        update_interval=DEFAULT_UPDATE_INTERVAL,
-        update_method=async_update_data,
-    )
-
-    await coordinator.async_config_entry_first_refresh()
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {
-        DATA_ACCOUNT: accounts,
-        DATA_COORDINATOR: coordinator,
-    }
-
-    hass.config_entries.async_setup_platforms(entry, PLATFORMS)
-
-    return True
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def options_update_listener(
+    hass: HomeAssistant, entry: RidwellConfigEntry
+) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: RidwellConfigEntry) -> None:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+    await hass.config_entries.async_unload_platforms_or_raise(entry, PLATFORMS)
 
-    return unload_ok
+
+async def async_migrate_entry(hass: HomeAssistant, entry: RidwellConfigEntry) -> None:
+    """Migrate an old config entry."""
+    version = entry.version
+
+    LOGGER.debug("Migrating from version %s", version)
+
+    # 1 -> 2: Update unique ID of existing, single sensor entity to be consistent with
+    # common format for platforms going forward:
+    if version == 1:
+        version = 2
+        hass.config_entries.async_update_entry(entry, version=version)
+
+        @callback
+        def migrate_unique_id(entity_entry: er.RegistryEntry) -> dict[str, Any]:
+            """Migrate the unique ID to a new format."""
+            return {
+                "new_unique_id": f"{entity_entry.unique_id}_{SENSOR_TYPE_NEXT_PICKUP}"
+            }
+
+        await er.async_migrate_entries(hass, entry.entry_id, migrate_unique_id)
+
+    LOGGER.debug("Migration to version %s successful", version)

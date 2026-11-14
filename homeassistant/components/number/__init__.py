@@ -1,152 +1,110 @@
 """Component to allow numeric input for platforms."""
-from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import timedelta
 import logging
-from typing import Any, Literal, final
-
-import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_MODE
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.config_validation import (  # noqa: F401
-    PLATFORM_SCHEMA,
-    PLATFORM_SCHEMA_BASE,
-)
-from homeassistant.helpers.entity import Entity, EntityDescription
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.exceptions import ConfigEntryError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_component import EntityComponent
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    AMBIGUOUS_UNITS,
     ATTR_MAX,
     ATTR_MIN,
     ATTR_STEP,
     ATTR_VALUE,
+    DATA_COMPONENT,
     DEFAULT_MAX_VALUE,
     DEFAULT_MIN_VALUE,
     DEFAULT_STEP,
+    DEVICE_CLASS_UNITS,
+    DEVICE_CLASSES_SCHEMA,
     DOMAIN,
-    MODE_AUTO,
     SERVICE_SET_VALUE,
+    UNIT_CONVERTERS,
+    NumberDeviceClass,
+    NumberEntityCapabilityAttribute,
+    NumberMode,
+    NumberService,
+    NumberServiceArgument,
 )
+from .entity import (
+    NumberEntity,
+    NumberEntityDescription,
+    NumberExtraStoredData,
+    RestoreNumber,
+)
+from .services import async_setup_services
+from .websocket_api import async_setup as async_setup_ws_api
 
-SCAN_INTERVAL = timedelta(seconds=30)
+_LOGGER = logging.getLogger(__name__)
 
 ENTITY_ID_FORMAT = DOMAIN + ".{}"
+PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA
+PLATFORM_SCHEMA_BASE = cv.PLATFORM_SCHEMA_BASE
+SCAN_INTERVAL = timedelta(seconds=30)
 
 MIN_TIME_BETWEEN_SCANS = timedelta(seconds=10)
 
-_LOGGER = logging.getLogger(__name__)
+
+__all__ = [
+    "AMBIGUOUS_UNITS",
+    "ATTR_MAX",
+    "ATTR_MIN",
+    "ATTR_MODE",
+    "ATTR_STEP",
+    "ATTR_VALUE",
+    "DEFAULT_MAX_VALUE",
+    "DEFAULT_MIN_VALUE",
+    "DEFAULT_STEP",
+    "DEVICE_CLASSES_SCHEMA",
+    "DEVICE_CLASS_UNITS",
+    "DOMAIN",
+    "PLATFORM_SCHEMA",
+    "PLATFORM_SCHEMA_BASE",
+    "SERVICE_SET_VALUE",
+    "UNIT_CONVERTERS",
+    "NumberDeviceClass",
+    "NumberEntity",
+    "NumberEntityCapabilityAttribute",
+    "NumberEntityDescription",
+    "NumberExtraStoredData",
+    "NumberMode",
+    "NumberService",
+    "NumberServiceArgument",
+    "RestoreNumber",
+]
+
+# mypy: disallow-any-generics
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Number entities."""
-    component = hass.data[DOMAIN] = EntityComponent(
+    component = hass.data[DATA_COMPONENT] = EntityComponent[NumberEntity](
         _LOGGER, DOMAIN, hass, SCAN_INTERVAL
     )
+    async_setup_ws_api(hass)
     await component.async_setup(config)
 
-    component.async_register_entity_service(
-        SERVICE_SET_VALUE,
-        {vol.Required(ATTR_VALUE): vol.Coerce(float)},
-        async_set_value,
-    )
+    async_setup_services(hass)
 
     return True
 
 
-async def async_set_value(entity: NumberEntity, service_call: ServiceCall) -> None:
-    """Service call wrapper to set a new value."""
-    value = service_call.data["value"]
-    if value < entity.min_value or value > entity.max_value:
-        raise ValueError(
-            f"Value {value} for {entity.name} is outside valid range {entity.min_value} - {entity.max_value}"
-        )
-    await entity.async_set_value(value)
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Set up a config entry."""
-    component: EntityComponent = hass.data[DOMAIN]
-    return await component.async_setup_entry(entry)
+    if not await hass.data[DATA_COMPONENT].async_setup_entry(entry):
+        raise ConfigEntryError(
+            translation_domain=HOMEASSISTANT_DOMAIN,
+            translation_key="platform_setup_failed",
+            translation_placeholders={"platform": entry.domain, "domain": DOMAIN},
+        )
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Unload a config entry."""
-    component: EntityComponent = hass.data[DOMAIN]
-    return await component.async_unload_entry(entry)
-
-
-@dataclass
-class NumberEntityDescription(EntityDescription):
-    """A class that describes number entities."""
-
-
-class NumberEntity(Entity):
-    """Representation of a Number entity."""
-
-    entity_description: NumberEntityDescription
-    _attr_max_value: float = DEFAULT_MAX_VALUE
-    _attr_min_value: float = DEFAULT_MIN_VALUE
-    _attr_state: None = None
-    _attr_step: float
-    _attr_mode: Literal["auto", "slider", "box"] = MODE_AUTO
-    _attr_value: float
-
-    @property
-    def capability_attributes(self) -> dict[str, Any]:
-        """Return capability attributes."""
-        return {
-            ATTR_MIN: self.min_value,
-            ATTR_MAX: self.max_value,
-            ATTR_STEP: self.step,
-            ATTR_MODE: self.mode,
-        }
-
-    @property
-    def min_value(self) -> float:
-        """Return the minimum value."""
-        return self._attr_min_value
-
-    @property
-    def max_value(self) -> float:
-        """Return the maximum value."""
-        return self._attr_max_value
-
-    @property
-    def step(self) -> float:
-        """Return the increment/decrement step."""
-        if hasattr(self, "_attr_step"):
-            return self._attr_step
-        step = DEFAULT_STEP
-        value_range = abs(self.max_value - self.min_value)
-        if value_range != 0:
-            while value_range <= step:
-                step /= 10.0
-        return step
-
-    @property
-    def mode(self) -> Literal["auto", "slider", "box"]:
-        """Return the mode of the entity."""
-        return self._attr_mode
-
-    @property
-    @final
-    def state(self) -> float | None:
-        """Return the entity state."""
-        return self.value
-
-    @property
-    def value(self) -> float | None:
-        """Return the entity value to represent the entity state."""
-        return self._attr_value
-
-    def set_value(self, value: float) -> None:
-        """Set new value."""
-        raise NotImplementedError()
-
-    async def async_set_value(self, value: float) -> None:
-        """Set new value."""
-        await self.hass.async_add_executor_job(self.set_value, value)
+    await hass.data[DATA_COMPONENT].async_unload_entry(entry)

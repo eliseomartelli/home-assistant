@@ -1,139 +1,207 @@
 """Support for getting collected information from PVOutput."""
-from __future__ import annotations
 
-from collections import namedtuple
-from datetime import timedelta
-import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import override
 
-import voluptuous as vol
+from pvo import Status
 
-from homeassistant.components.rest.data import RestData
 from homeassistant.components.sensor import (
-    DEVICE_CLASS_ENERGY,
-    PLATFORM_SCHEMA,
-    STATE_CLASS_TOTAL_INCREASING,
+    DOMAIN as SENSOR_DOMAIN,
+    SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
 )
 from homeassistant.const import (
-    ATTR_DATE,
-    ATTR_TEMPERATURE,
-    ATTR_TIME,
-    ATTR_VOLTAGE,
-    CONF_API_KEY,
-    CONF_NAME,
-    ENERGY_WATT_HOUR,
+    EntityCategory,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTemperature,
 )
-from homeassistant.core import callback
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
-_LOGGER = logging.getLogger(__name__)
-_ENDPOINT = "http://pvoutput.org/service/r2/getstatus.jsp"
+from .const import CONF_SYSTEM_ID, DOMAIN
+from .coordinator import PvOutputConfigEntry, PVOutputDataUpdateCoordinator
 
-ATTR_ENERGY_GENERATION = "energy_generation"
-ATTR_POWER_GENERATION = "power_generation"
-ATTR_ENERGY_CONSUMPTION = "energy_consumption"
-ATTR_POWER_CONSUMPTION = "power_consumption"
-ATTR_EFFICIENCY = "efficiency"
+PARALLEL_UPDATES = 0
 
-CONF_SYSTEM_ID = "system_id"
 
-DEFAULT_NAME = "PVOutput"
-DEFAULT_VERIFY_SSL = True
+@dataclass(frozen=True, kw_only=True)
+class PVOutputSensorEntityDescription(SensorEntityDescription):
+    """Describes a PVOutput sensor entity."""
 
-SCAN_INTERVAL = timedelta(minutes=2)
+    value_fn: Callable[[Status], int | float | datetime | None]
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_API_KEY): cv.string,
-        vol.Required(CONF_SYSTEM_ID): cv.string,
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-    }
+    # Not every uploader sends these values, so these sensors are only
+    # created once the system reports a value for them.
+    optional: bool = False
+
+
+SENSORS: tuple[PVOutputSensorEntityDescription, ...] = (
+    PVOutputSensorEntityDescription(
+        key="energy_consumption",
+        optional=True,
+        translation_key="energy_consumption",
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda status: status.energy_consumption,
+    ),
+    PVOutputSensorEntityDescription(
+        key="energy_generation",
+        translation_key="energy_generation",
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda status: status.energy_generation,
+    ),
+    PVOutputSensorEntityDescription(
+        key="last_reported",
+        translation_key="last_reported",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        # PVOutput reports the local time of the system without its timezone,
+        # assume the system is in the same timezone as Home Assistant
+        value_fn=lambda status: status.reported_datetime.replace(
+            tzinfo=dt_util.get_default_time_zone()
+        ),
+    ),
+    PVOutputSensorEntityDescription(
+        key="normalized_output",
+        translation_key="efficiency",
+        native_unit_of_measurement=(
+            f"{UnitOfEnergy.KILO_WATT_HOUR}/{UnitOfPower.KILO_WATT}"
+        ),
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda status: status.normalized_output,
+    ),
+    PVOutputSensorEntityDescription(
+        key="power_consumption",
+        optional=True,
+        translation_key="power_consumption",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda status: status.power_consumption,
+    ),
+    PVOutputSensorEntityDescription(
+        key="power_generation",
+        translation_key="power_generation",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda status: status.power_generation,
+    ),
+    PVOutputSensorEntityDescription(
+        key="temperature",
+        optional=True,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.temperature,
+    ),
+    PVOutputSensorEntityDescription(
+        key="voltage",
+        optional=True,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_registry_enabled_default=False,
+        value_fn=lambda status: status.voltage,
+    ),
 )
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the PVOutput sensor."""
-    name = config.get(CONF_NAME)
-    api_key = config.get(CONF_API_KEY)
-    system_id = config.get(CONF_SYSTEM_ID)
-    method = "GET"
-    payload = auth = None
-    verify_ssl = DEFAULT_VERIFY_SSL
-    headers = {"X-Pvoutput-Apikey": api_key, "X-Pvoutput-SystemId": system_id}
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: PvOutputConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Set up a PVOutput sensors based on a config entry."""
+    coordinator = entry.runtime_data
+    entity_registry = er.async_get(hass)
+    system_id = entry.data[CONF_SYSTEM_ID]
+    added_keys: set[str] = set()
 
-    rest = RestData(hass, method, _ENDPOINT, auth, headers, None, payload, verify_ssl)
-    await rest.async_update()
+    def _should_add(description: PVOutputSensorEntityDescription) -> bool:
+        """Return if a sensor should be added."""
+        if not description.optional:
+            return True
 
-    if rest.data is None:
-        _LOGGER.error("Unable to fetch data from PVOutput")
-        return False
+        if description.value_fn(coordinator.data) is not None:
+            return True
 
-    async_add_entities([PvoutputSensor(rest, name)])
+        # Keep sensors that existed before, even if they have no value now
+        return (
+            entity_registry.async_get_entity_id(
+                SENSOR_DOMAIN, DOMAIN, f"{system_id}_{description.key}"
+            )
+            is not None
+        )
+
+    @callback
+    def _async_add_new_sensors() -> None:
+        """Add sensors that have not been added yet, if they should be."""
+        new_descriptions = [
+            description
+            for description in SENSORS
+            if description.key not in added_keys and _should_add(description)
+        ]
+        if not new_descriptions:
+            return
+
+        added_keys.update(description.key for description in new_descriptions)
+        async_add_entities(
+            PVOutputSensorEntity(
+                coordinator=coordinator,
+                description=description,
+                system_id=system_id,
+            )
+            for description in new_descriptions
+        )
+
+    _async_add_new_sensors()
+    entry.async_on_unload(coordinator.async_add_listener(_async_add_new_sensors))
 
 
-class PvoutputSensor(SensorEntity):
+class PVOutputSensorEntity(
+    CoordinatorEntity[PVOutputDataUpdateCoordinator], SensorEntity
+):
     """Representation of a PVOutput sensor."""
 
-    _attr_state_class = STATE_CLASS_TOTAL_INCREASING
-    _attr_device_class = DEVICE_CLASS_ENERGY
-    _attr_native_unit_of_measurement = ENERGY_WATT_HOUR
+    entity_description: PVOutputSensorEntityDescription
+    _attr_has_entity_name = True
 
-    def __init__(self, rest, name):
+    def __init__(
+        self,
+        *,
+        coordinator: PVOutputDataUpdateCoordinator,
+        description: PVOutputSensorEntityDescription,
+        system_id: int,
+    ) -> None:
         """Initialize a PVOutput sensor."""
-        self.rest = rest
-        self._attr_name = name
-        self.pvcoutput = None
-        self.status = namedtuple(
-            "status",
-            [
-                ATTR_DATE,
-                ATTR_TIME,
-                ATTR_ENERGY_GENERATION,
-                ATTR_POWER_GENERATION,
-                ATTR_ENERGY_CONSUMPTION,
-                ATTR_POWER_CONSUMPTION,
-                ATTR_EFFICIENCY,
-                ATTR_TEMPERATURE,
-                ATTR_VOLTAGE,
-            ],
+        super().__init__(coordinator=coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{system_id}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            configuration_url=f"https://pvoutput.org/list.jsp?sid={system_id}",
+            identifiers={(DOMAIN, str(system_id))},
+            manufacturer="PVOutput",
+            model=coordinator.system.inverter_brand,
+            name=coordinator.system.system_name,
         )
 
     @property
-    def native_value(self):
+    @override
+    def native_value(self) -> int | float | datetime | None:
         """Return the state of the device."""
-        if self.pvcoutput is not None:
-            return self.pvcoutput.energy_generation
-        return None
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes of the monitored installation."""
-        if self.pvcoutput is not None:
-            return {
-                ATTR_ENERGY_GENERATION: self.pvcoutput.energy_generation,
-                ATTR_POWER_GENERATION: self.pvcoutput.power_generation,
-                ATTR_ENERGY_CONSUMPTION: self.pvcoutput.energy_consumption,
-                ATTR_POWER_CONSUMPTION: self.pvcoutput.power_consumption,
-                ATTR_EFFICIENCY: self.pvcoutput.efficiency,
-                ATTR_TEMPERATURE: self.pvcoutput.temperature,
-                ATTR_VOLTAGE: self.pvcoutput.voltage,
-            }
-
-    async def async_update(self):
-        """Get the latest data from the PVOutput API and updates the state."""
-        await self.rest.async_update()
-        self._async_update_from_rest_data()
-
-    async def async_added_to_hass(self):
-        """Ensure the data from the initial update is reflected in the state."""
-        self._async_update_from_rest_data()
-
-    @callback
-    def _async_update_from_rest_data(self):
-        """Update state from the rest data."""
-        try:
-            # https://pvoutput.org/help/api_specification.html#get-status-service
-            self.pvcoutput = self.status._make(self.rest.data.split(","))
-        except TypeError:
-            self.pvcoutput = None
-            _LOGGER.error("Unable to fetch data from PVOutput. %s", self.rest.data)
+        return self.entity_description.value_fn(self.coordinator.data)

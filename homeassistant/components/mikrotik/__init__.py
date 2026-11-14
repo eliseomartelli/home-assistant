@@ -1,98 +1,139 @@
 """The Mikrotik component."""
-import voluptuous as vol
 
-from homeassistant.config_entries import SOURCE_IMPORT
-from homeassistant.const import (
-    CONF_HOST,
-    CONF_NAME,
-    CONF_PASSWORD,
-    CONF_PORT,
-    CONF_USERNAME,
-    CONF_VERIFY_SSL,
+from typing import Any
+
+from librouteros import Api
+
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import AnyDeviceEntry, format_mac
+from homeassistant.util import slugify
+
+from .const import ATTR_MANUFACTURER, DOMAIN
+from .coordinator import (
+    MikrotikConfigEntry,
+    MikrotikData,
+    MikrotikDataUpdateCoordinator,
+    get_api,
 )
-from homeassistant.helpers import config_validation as cv
+from .utils import mikrotik_config_entry_errors
 
-from .const import (
-    ATTR_MANUFACTURER,
-    CONF_ARP_PING,
-    CONF_DETECTION_TIME,
-    CONF_FORCE_DHCP,
-    DEFAULT_API_PORT,
-    DEFAULT_DETECTION_TIME,
-    DEFAULT_NAME,
-    DOMAIN,
-    PLATFORMS,
-)
-from .hub import MikrotikHub
-
-MIKROTIK_SCHEMA = vol.All(
-    vol.Schema(
-        {
-            vol.Required(CONF_HOST): cv.string,
-            vol.Required(CONF_USERNAME): cv.string,
-            vol.Required(CONF_PASSWORD): cv.string,
-            vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-            vol.Optional(CONF_PORT, default=DEFAULT_API_PORT): cv.port,
-            vol.Optional(CONF_VERIFY_SSL, default=False): cv.boolean,
-            vol.Optional(CONF_ARP_PING, default=False): cv.boolean,
-            vol.Optional(CONF_FORCE_DHCP, default=False): cv.boolean,
-            vol.Optional(
-                CONF_DETECTION_TIME, default=DEFAULT_DETECTION_TIME
-            ): cv.time_period,
-        }
-    )
-)
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.DEVICE_TRACKER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.UPDATE,
+]
 
 
-CONFIG_SCHEMA = vol.Schema(
-    vol.All(
-        cv.deprecated(DOMAIN), {DOMAIN: vol.All(cv.ensure_list, [MIKROTIK_SCHEMA])}
-    ),
-    extra=vol.ALLOW_EXTRA,
-)
+def _call_api(data: dict[str, Any]) -> Api:
+    """Call the Mikrotik API."""
+    with mikrotik_config_entry_errors(during_setup=True):
+        api: Api = get_api(data)
+        return api
 
 
-async def async_setup(hass, config):
-    """Import the Mikrotik component from config."""
-
-    if DOMAIN in config:
-        for entry in config[DOMAIN]:
-            hass.async_create_task(
-                hass.config_entries.flow.async_init(
-                    DOMAIN, context={"source": SOURCE_IMPORT}, data=entry
-                )
-            )
-
-    return True
+def _setup_mikrotik_data(
+    hass: HomeAssistant, config_entry: MikrotikConfigEntry, data: dict[str, Any]
+) -> MikrotikData:
+    """Connect to the Mikrotik API and fetch the hub details."""
+    mk_data = MikrotikData(hass, config_entry, _call_api(data))
+    mk_data.get_hub_details()
+    return mk_data
 
 
-async def async_setup_entry(hass, config_entry):
+async def async_setup_entry(
+    hass: HomeAssistant, config_entry: MikrotikConfigEntry
+) -> None:
     """Set up the Mikrotik component."""
+    mk_data = await hass.async_add_executor_job(
+        _setup_mikrotik_data, hass, config_entry, dict(config_entry.data)
+    )
 
-    hub = MikrotikHub(hass, config_entry)
-    if not await hub.async_setup():
-        return False
+    coordinator = MikrotikDataUpdateCoordinator(hass, config_entry, mk_data)
+    await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = hub
-    device_registry = await hass.helpers.device_registry.async_get_registry()
+    config_entry.runtime_data = coordinator
+
+    device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
         config_entry_id=config_entry.entry_id,
-        connections={(DOMAIN, hub.serial_num)},
+        identifiers={(DOMAIN, coordinator.serial_num)},
         manufacturer=ATTR_MANUFACTURER,
-        model=hub.model,
-        name=hub.hostname,
-        sw_version=hub.firmware,
+        model=coordinator.model,
+        name=coordinator.hostname,
+        sw_version=coordinator.firmware,
     )
 
-    return True
+    @callback
+    def _async_remove_stale_devices() -> None:
+        """Remove interface devices the hub no longer reports."""
+        known_identifiers = {(DOMAIN, coordinator.serial_num)}
+        for interface in coordinator.api.interfaces:
+            if (mac := interface.get("mac-address")) and (
+                name := interface.get("name")
+            ):
+                known_identifiers.add((DOMAIN, f"{slugify(mac)}_{name}"))
+
+        for device_entry in dr.async_entries_for_config_entry(
+            device_registry, config_entry.entry_id
+        ):
+            own_identifiers = {
+                identifier
+                for identifier in device_entry.identifiers
+                if identifier[0] == DOMAIN
+            }
+            # device-tracker clients are linked by MAC connection only, so an
+            # entry without an own identifier is never an interface device
+            if own_identifiers and own_identifiers.isdisjoint(known_identifiers):
+                device_registry.async_remove_device(device_entry.id)
+
+    _async_remove_stale_devices()
+    config_entry.async_on_unload(
+        coordinator.async_add_listener(_async_remove_stale_devices)
+    )
+
+    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
 
-async def async_unload_entry(hass, config_entry):
+async def async_unload_entry(
+    hass: HomeAssistant, config_entry: MikrotikConfigEntry
+) -> None:
     """Unload a config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(
-        config_entry, PLATFORMS
-    )
+    await hass.config_entries.async_unload_platforms_or_raise(config_entry, PLATFORMS)
+    await hass.async_add_executor_job(config_entry.runtime_data.api.api.close)
 
-    hass.data[DOMAIN].pop(config_entry.entry_id)
 
-    return unload_ok
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: MikrotikConfigEntry, device_entry: AnyDeviceEntry
+) -> bool:
+    """Allow removing client devices which are not currently connected."""
+    if not isinstance(device_entry, dr.DeviceEntry):
+        return False
+    # Hub and interface devices are removed automatically when they go away
+    if any(identifier[0] == DOMAIN for identifier in device_entry.identifiers):
+        return False
+    if config_entry.state is not ConfigEntryState.LOADED:
+        return True
+    coordinator = config_entry.runtime_data
+    device_macs = {
+        mac
+        for connection_type, mac in device_entry.connections
+        if connection_type == dr.CONNECTION_NETWORK_MAC
+    }
+    clients = {
+        mac: client
+        # Copy, a poll in the executor can add clients while iterating
+        for mac, client in list(coordinator.api.devices.items())
+        if format_mac(mac) in device_macs
+    }
+    if any(coordinator.is_client_connected(client) for client in clients.values()):
+        return False
+    for mac in clients:
+        coordinator.async_forget_client(mac)
+    return True

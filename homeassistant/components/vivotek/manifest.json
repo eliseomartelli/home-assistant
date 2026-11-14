@@ -1,8 +1,13 @@
 {
   "domain": "vivotek",
   "name": "VIVOTEK",
-  "documentation": "https://www.home-assistant.io/integrations/vivotek",
-  "requirements": ["libpyvivotek==0.4.0"],
+  "categories": ["security_safety.cameras"],
   "codeowners": ["@HarlemSquirrel"],
-  "iot_class": "local_polling"
+  "config_flow": true,
+  "connectivity": ["network"],
+  "documentation": "https://www.home-assistant.io/integrations/vivotek",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "loggers": ["libpyvivotek"],
+  "requirements": ["libpyvivotek==0.6.1"]
 }

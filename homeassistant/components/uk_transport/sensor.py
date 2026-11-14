@@ -1,17 +1,24 @@
 """Support for UK public transport data provided by transportapi.com."""
+
 from datetime import datetime, timedelta
 from http import HTTPStatus
 import logging
 import re
+from typing import Any, override
 
+import probatio
 import requests
-import voluptuous as vol
 
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
-from homeassistant.const import CONF_MODE, TIME_MINUTES
-import homeassistant.helpers.config_validation as cv
-from homeassistant.util import Throttle
-import homeassistant.util.dt as dt_util
+from homeassistant.components.sensor import (
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
+    SensorEntity,
+)
+from homeassistant.const import CONF_MODE, UnitOfTime
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.util import Throttle, dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +30,7 @@ ATTR_NEXT_BUSES = "next_buses"
 ATTR_STATION_CODE = "station_code"
 ATTR_CALLING_AT = "calling_at"
 ATTR_NEXT_TRAINS = "next_trains"
+ATTR_LAST_UPDATED = "last_updated"
 
 CONF_API_APP_KEY = "app_key"
 CONF_API_APP_ID = "app_id"
@@ -30,37 +38,47 @@ CONF_QUERIES = "queries"
 CONF_ORIGIN = "origin"
 CONF_DESTINATION = "destination"
 
-_QUERY_SCHEME = vol.Schema(
+_QUERY_SCHEME = probatio.Schema(
     {
-        vol.Required(CONF_MODE): vol.All(cv.ensure_list, [vol.In(["bus", "train"])]),
-        vol.Required(CONF_ORIGIN): cv.string,
-        vol.Required(CONF_DESTINATION): cv.string,
+        probatio.Required(CONF_MODE): probatio.All(
+            probatio.EnsureList(), [probatio.In(["bus", "train"])]
+        ),
+        probatio.Required(CONF_ORIGIN): cv.string,
+        probatio.Required(CONF_DESTINATION): cv.string,
     }
 )
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
     {
-        vol.Required(CONF_API_APP_ID): cv.string,
-        vol.Required(CONF_API_APP_KEY): cv.string,
-        vol.Required(CONF_QUERIES): [_QUERY_SCHEME],
+        probatio.Required(CONF_API_APP_ID): cv.string,
+        probatio.Required(probatio.Secret(CONF_API_APP_KEY)): cv.string,
+        probatio.Required(CONF_QUERIES): [_QUERY_SCHEME],
     }
 )
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+def setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Get the uk_transport sensor."""
-    sensors = []
-    number_sensors = len(config.get(CONF_QUERIES))
+    sensors: list[UkTransportSensor] = []
+    number_sensors = len(queries := config[CONF_QUERIES])
     interval = timedelta(seconds=87 * number_sensors)
 
-    for query in config.get(CONF_QUERIES):
+    api_app_id = config[CONF_API_APP_ID]
+    api_app_key = config[CONF_API_APP_KEY]
+
+    for query in queries:
         if "bus" in query.get(CONF_MODE):
             stop_atcocode = query.get(CONF_ORIGIN)
             bus_direction = query.get(CONF_DESTINATION)
             sensors.append(
                 UkTransportLiveBusTimeSensor(
-                    config.get(CONF_API_APP_ID),
-                    config.get(CONF_API_APP_KEY),
+                    api_app_id,
+                    api_app_key,
                     stop_atcocode,
                     bus_direction,
                     interval,
@@ -72,8 +90,8 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
             calling_at = query.get(CONF_DESTINATION)
             sensors.append(
                 UkTransportLiveTrainTimeSensor(
-                    config.get(CONF_API_APP_ID),
-                    config.get(CONF_API_APP_KEY),
+                    api_app_id,
+                    api_app_key,
                     station_code,
                     calling_at,
                     interval,
@@ -84,8 +102,7 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
 
 
 class UkTransportSensor(SensorEntity):
-    """
-    Sensor that reads the UK transport web API.
+    """Sensor that reads the UK transport web API.
 
     transportapi.com provides comprehensive transport data for UK train, tube
     and bus travel across the UK via simple JSON API. Subclasses of this
@@ -94,7 +111,7 @@ class UkTransportSensor(SensorEntity):
 
     TRANSPORT_API_URL_BASE = "https://transportapi.com/v3/uk/"
     _attr_icon = "mdi:train"
-    _attr_native_unit_of_measurement = TIME_MINUTES
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
 
     def __init__(self, name, api_app_id, api_app_key, url):
         """Initialize the sensor."""
@@ -106,11 +123,13 @@ class UkTransportSensor(SensorEntity):
         self._state = None
 
     @property
+    @override
     def name(self):
         """Return the name of the sensor."""
         return self._name
 
     @property
+    @override
     def native_value(self):
         """Return the state of the sensor."""
         return self._state
@@ -121,7 +140,7 @@ class UkTransportSensor(SensorEntity):
             {"app_id": self._api_app_id, "app_key": self._api_app_key}, **params
         )
 
-        response = requests.get(self._url, params=request_params)
+        response = requests.get(self._url, params=request_params, timeout=10)
         if response.status_code != HTTPStatus.OK:
             _LOGGER.warning("Invalid response from API")
         elif "error" in response.json():
@@ -160,7 +179,7 @@ class UkTransportLiveBusTimeSensor(UkTransportSensor):
         if self._data != {}:
             self._next_buses = []
 
-            for (route, departures) in self._data["departures"].items():
+            for route, departures in self._data["departures"].items():
                 for departure in departures:
                     if self._destination_re.search(departure["direction"]):
                         self._next_buses.append(
@@ -180,10 +199,13 @@ class UkTransportLiveBusTimeSensor(UkTransportSensor):
                 self._state = None
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return other details about the sensor state."""
-        attrs = {}
         if self._data is not None:
+            attrs = {
+                ATTR_NEXT_BUSES: self._next_buses,
+            }
             for key in (
                 ATTR_ATCOCODE,
                 ATTR_LOCALITY,
@@ -191,8 +213,8 @@ class UkTransportLiveBusTimeSensor(UkTransportSensor):
                 ATTR_REQUEST_TIME,
             ):
                 attrs[key] = self._data.get(key)
-            attrs[ATTR_NEXT_BUSES] = self._next_buses
             return attrs
+        return None
 
 
 class UkTransportLiveTrainTimeSensor(UkTransportSensor):
@@ -250,15 +272,19 @@ class UkTransportLiveTrainTimeSensor(UkTransportSensor):
                     self._state = None
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return other details about the sensor state."""
-        attrs = {}
         if self._data is not None:
-            attrs[ATTR_STATION_CODE] = self._station_code
-            attrs[ATTR_CALLING_AT] = self._calling_at
+            attrs = {
+                ATTR_STATION_CODE: self._station_code,
+                ATTR_CALLING_AT: self._calling_at,
+                ATTR_LAST_UPDATED: self._data[ATTR_REQUEST_TIME],
+            }
             if self._next_trains:
                 attrs[ATTR_NEXT_TRAINS] = self._next_trains
             return attrs
+        return None
 
 
 def _delta_mins(hhmm_time_str):
@@ -271,5 +297,4 @@ def _delta_mins(hhmm_time_str):
     if hhmm_datetime < now:
         hhmm_datetime += timedelta(days=1)
 
-    delta_mins = (hhmm_datetime - now).total_seconds() // 60
-    return delta_mins
+    return (hhmm_datetime - now).total_seconds() // 60

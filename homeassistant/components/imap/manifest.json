@@ -1,8 +1,14 @@
 {
   "domain": "imap",
   "name": "IMAP",
+  "categories": ["messaging_notifications.email_sms_calls"],
+  "codeowners": ["@jbouwh"],
+  "config_flow": true,
+  "connectivity": ["cloud", "network"],
+  "dependencies": ["repairs"],
   "documentation": "https://www.home-assistant.io/integrations/imap",
-  "requirements": ["aioimaplib==0.9.0"],
-  "codeowners": [],
-  "iot_class": "cloud_push"
+  "integration_type": "service",
+  "iot_class": "cloud_push",
+  "loggers": ["aioimaplib"],
+  "requirements": ["aioimaplib==2.0.3"]
 }

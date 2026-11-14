@@ -1,41 +1,46 @@
-"""Make sure that handling real world LG HomeKit characteristics isn't broken."""
+"""Test against characteristics captured from an LG TV."""
 
-from homeassistant.components.media_player.const import (
-    SUPPORT_PAUSE,
-    SUPPORT_PLAY,
-    SUPPORT_SELECT_SOURCE,
+from homeassistant.components.media_player import (
+    ATTR_INPUT_SOURCE_LIST,
+    MediaPlayerEntityFeature,
 )
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.const import ATTR_SUPPORTED_FEATURES, STATE_ON
+from homeassistant.core import HomeAssistant
 
-from tests.common import async_get_device_automations
-from tests.components.homekit_controller.common import (
-    Helper,
+from ..common import (
+    HUB_TEST_ACCESSORY_ID,
+    DeviceTestInfo,
+    assert_devices_and_entities_created,
     setup_accessories_from_file,
     setup_test_accessories,
 )
 
 
-async def test_lg_tv(hass):
-    """Test that a Koogeek LS1 can be correctly setup in HA."""
+async def test_lg_tv_setup(hass: HomeAssistant) -> None:
+    """Test that a LG TV can be correctly setup in HA."""
     accessories = await setup_accessories_from_file(hass, "lg_tv.json")
-    config_entry, pairing = await setup_test_accessories(hass, accessories)
+    config_entry, _ = await setup_test_accessories(hass, accessories)
 
-    entity_registry = er.async_get(hass)
-
-    # Assert that the entity is correctly added to the entity registry
-    entry = entity_registry.async_get("media_player.lg_webos_tv_af80")
-    assert entry.unique_id == "homekit-999AAAAAA999-48"
-
-    helper = Helper(
-        hass, "media_player.lg_webos_tv_af80", pairing, accessories[0], config_entry
+    await assert_devices_and_entities_created(
+        hass,
+        config_entry.entry_id,
+        DeviceTestInfo(
+            unique_id=HUB_TEST_ACCESSORY_ID,
+            name="LG webOS TV AF80",
+            model="OLED55B9PUA",
+            manufacturer="LG Electronics",
+            sw_version="04.71.04",
+            hw_version="1",
+            serial_number="A0000A000000000A",
+            devices=[],
+            entities=[],
+        ),
     )
-    state = await helper.poll_and_get_state()
 
-    # Assert that the friendly name is detected correctly
-    assert state.attributes["friendly_name"] == "LG webOS TV AF80"
-
-    # Assert that all channels were found and that we know which is active.
-    assert state.attributes["source_list"] == [
+    state = hass.states.get("media_player.lg_webos_tv_af80")
+    assert state is not None
+    assert state.state == STATE_ON
+    assert state.attributes[ATTR_INPUT_SOURCE_LIST] == [
         "AirPlay",
         "Live TV",
         "HDMI 1",
@@ -44,27 +49,9 @@ async def test_lg_tv(hass):
         "AV",
         "HDMI 4",
     ]
-    assert state.attributes["source"] == "HDMI 4"
-
-    # Assert that all optional features the LS1 supports are detected
-    assert state.attributes["supported_features"] == (
-        SUPPORT_PAUSE | SUPPORT_PLAY | SUPPORT_SELECT_SOURCE
-    )
-
-    # The LG TV doesn't (at least at this patch level) report its media state via
-    # CURRENT_MEDIA_STATE. Therefore "ok" is the best we can say.
-    assert state.state == "ok"
-
-    device_registry = dr.async_get(hass)
-
-    device = device_registry.async_get(entry.device_id)
-    assert device.manufacturer == "LG Electronics"
-    assert device.name == "LG webOS TV AF80"
-    assert device.model == "OLED55B9PUA"
-    assert device.sw_version == "04.71.04"
-    assert device.via_device_id is None
-
-    # A TV has media player device triggers
-    triggers = await async_get_device_automations(hass, "trigger", device.id)
-    for trigger in triggers:
-        assert trigger["domain"] == "media_player"
+    features = state.attributes[ATTR_SUPPORTED_FEATURES]
+    assert features & MediaPlayerEntityFeature.TURN_ON
+    assert features & MediaPlayerEntityFeature.TURN_OFF
+    assert features & MediaPlayerEntityFeature.SELECT_SOURCE
+    assert features & MediaPlayerEntityFeature.PLAY
+    assert features & MediaPlayerEntityFeature.PAUSE

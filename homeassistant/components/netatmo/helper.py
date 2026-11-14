@@ -1,10 +1,17 @@
 """Helper for Netatmo integration."""
-from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 
-import pyatmo
+from pyatmo.modules.device_types import DeviceType as NetatmoDeviceType
+
+
+def device_type_to_str(device_type: NetatmoDeviceType) -> str:
+    """Convert a device type to a string.
+
+    Used to generate backwards compatible unique ids.
+    """
+    return f"{type(device_type).__name__}.{device_type}"
 
 
 @dataclass
@@ -18,26 +25,4 @@ class NetatmoArea:
     lon_sw: float
     mode: str
     show_on_map: bool
-    uuid: UUID = uuid4()
-
-
-def get_all_home_ids(home_data: pyatmo.HomeData | None) -> list[str]:
-    """Get all the home ids returned by NetAtmo API."""
-    if home_data is None:
-        return []
-    return [
-        home_data.homes[home_id]["id"]
-        for home_id in home_data.homes
-        if "modules" in home_data.homes[home_id]
-    ]
-
-
-def update_climate_schedules(home_ids: list[str], schedules: dict) -> dict:
-    """Get updated list of all climate schedules."""
-    return {
-        home_id: {
-            schedule_id: schedule_data.get("name")
-            for schedule_id, schedule_data in schedules[home_id].items()
-        }
-        for home_id in home_ids
-    }
+    uuid: UUID = field(default_factory=uuid4)

@@ -1,5 +1,19 @@
 """Constants for the Openhome component."""
+
+from enum import StrEnum
+
 DOMAIN = "openhome"
-SERVICE_INVOKE_PIN = "invoke_pin"
-ATTR_PIN_INDEX = "pin"
+
 DATA_OPENHOME = "openhome"
+
+
+class OpenhomeService(StrEnum):
+    """Store keys for Openhome services."""
+
+    INVOKE_PIN = "invoke_pin"
+
+
+class OpenhomeServiceArgument(StrEnum):
+    """Store keys for Openhome service arguments."""
+
+    PIN = "pin"

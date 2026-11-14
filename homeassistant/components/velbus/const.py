@@ -1,7 +1,8 @@
 """Const for Velbus."""
+
 from typing import Final
 
-from homeassistant.components.climate.const import (
+from homeassistant.components.climate import (
     PRESET_AWAY,
     PRESET_COMFORT,
     PRESET_ECO,
@@ -10,12 +11,8 @@ from homeassistant.components.climate.const import (
 
 DOMAIN: Final = "velbus"
 
-CONF_INTERFACE: Final = "interface"
-CONF_MEMO_TEXT: Final = "memo_text"
-
-SERVICE_SCAN: Final = "scan"
-SERVICE_SYNC: Final = "sync_clock"
-SERVICE_SET_MEMO_TEXT: Final = "set_memo_text"
+CONF_TLS: Final = "tls"
+CONF_VLP_FILE: Final = "vlp_file"
 
 PRESET_MODES: Final = {
     PRESET_ECO: "safe",

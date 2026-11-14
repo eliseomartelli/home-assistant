@@ -1,0 +1,8 @@
+{
+  "issues": {
+    "integration_removed": {
+      "description": "The Fitbit integration has been removed from Home Assistant.\n\nOn November 2, 2026, Google permanently shut down the legacy Fitbit Web API ([Fitbit Web API Migration Guide]({migration_guide})). Because legacy Fitbit OAuth credentials and tokens do not carry over, existing entries can no longer sync data or re-authenticate.\n\nTo resolve this issue:\n1. Set up the [Google Health integration]({google_health_docs}), which replaces the Fitbit integration using the Google Health API.\n2. Remove your defunct [Fitbit integration entries]({entries}).\n3. Optionally remove any unused Fitbit OAuth credentials in [Application credentials]({application_credentials}).\n\nOnce all Fitbit entries are removed, this issue will automatically clear.",
+      "title": "The Fitbit integration has been removed"
+    }
+  }
+}

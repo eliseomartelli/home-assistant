@@ -1,10 +1,17 @@
 {
   "domain": "accuweather",
   "name": "AccuWeather",
-  "documentation": "https://www.home-assistant.io/integrations/accuweather/",
-  "requirements": ["accuweather==0.3.0"],
+  "categories": [
+    "weather_alerts.forecasts",
+    "weather_alerts.air_quality_pollen"
+  ],
   "codeowners": ["@bieniu"],
   "config_flow": true,
-  "quality_scale": "platinum",
-  "iot_class": "cloud_polling"
+  "connectivity": ["cloud"],
+  "documentation": "https://www.home-assistant.io/integrations/accuweather",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "loggers": ["accuweather"],
+  "quality_scale": "silver",
+  "requirements": ["accuweather==5.1.0"]
 }

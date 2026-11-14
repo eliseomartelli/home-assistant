@@ -1,10 +1,14 @@
 {
   "domain": "neato",
   "name": "Neato Botvac",
+  "categories": ["appliances_cleaning.cleaning"],
+  "codeowners": [],
   "config_flow": true,
+  "connectivity": ["cloud"],
+  "dependencies": ["application_credentials"],
   "documentation": "https://www.home-assistant.io/integrations/neato",
-  "requirements": ["pybotvac==0.0.22"],
-  "codeowners": ["@dshokouhi", "@Santobert"],
-  "dependencies": ["http"],
-  "iot_class": "cloud_polling"
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "loggers": ["pybotvac"],
+  "requirements": ["pybotvac==0.0.29"]
 }

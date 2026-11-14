@@ -1,614 +1,579 @@
 """Test the Google Maps Travel Time config flow."""
-from homeassistant import config_entries, data_entry_flow
+
+from unittest.mock import AsyncMock
+
+from google_maps_routing_api import (
+    GoogleMapsRoutingApiAuthError,
+    GoogleMapsRoutingApiConnectionTimeoutError,
+    GoogleMapsRoutingApiError,
+)
+import pytest
+from pytest_homeassistant.common import MockConfigEntry
+
 from homeassistant.components.google_travel_time.const import (
     ARRIVAL_TIME,
     CONF_ARRIVAL_TIME,
     CONF_AVOID,
     CONF_DEPARTURE_TIME,
     CONF_DESTINATION,
-    CONF_LANGUAGE,
-    CONF_OPTIONS,
     CONF_ORIGIN,
     CONF_TIME,
     CONF_TIME_TYPE,
     CONF_TRAFFIC_MODEL,
     CONF_TRANSIT_MODE,
     CONF_TRANSIT_ROUTING_PREFERENCE,
-    CONF_TRAVEL_MODE,
+    CONF_TRAVEL_ROUTING_PREFERENCE,
     CONF_UNITS,
     DEFAULT_NAME,
     DEPARTURE_TIME,
     DOMAIN,
+    UNITS_IMPERIAL,
 )
-from homeassistant.const import (
-    CONF_API_KEY,
-    CONF_MODE,
-    CONF_NAME,
-    CONF_UNIT_SYSTEM_IMPERIAL,
-    CONF_UNIT_SYSTEM_METRIC,
-)
+from homeassistant.config_entries import SOURCE_USER, ConfigFlowResult
+from homeassistant.const import CONF_API_KEY, CONF_LANGUAGE, CONF_MODE
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 
-from tests.common import MockConfigEntry
+from .const import DEFAULT_OPTIONS, MOCK_CONFIG, RECONFIGURE_CONFIG
 
 
-async def test_minimum_fields(hass, validate_config_entry, bypass_setup):
-    """Test we get the form."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
+async def assert_common_reconfigure_steps(
+    hass: HomeAssistant, reconfigure_result: ConfigFlowResult, routes_mock: AsyncMock
+) -> None:
+    """Step through and assert the happy case reconfigure flow."""
+    routes_mock.async_compute_routes.return_value = None
+    reconfigure_successful_result = await hass.config_entries.flow.async_configure(
+        reconfigure_result["flow_id"],
+        RECONFIGURE_CONFIG,
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result["errors"] == {}
-
-    result2 = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-        },
-    )
-
-    assert result2["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    assert result2["title"] == DEFAULT_NAME
-    assert result2["data"] == {
-        CONF_NAME: DEFAULT_NAME,
-        CONF_API_KEY: "api_key",
-        CONF_ORIGIN: "location1",
-        CONF_DESTINATION: "location2",
-    }
-
-
-async def test_invalid_config_entry(hass, invalidate_config_entry):
-    """Test we get the form."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result["errors"] == {}
-    result2 = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-        },
-    )
-
-    assert result2["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result2["errors"] == {"base": "cannot_connect"}
-
-
-async def test_options_flow(hass, validate_config_entry, bypass_update):
-    """Test options flow."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-        },
-        options={
-            CONF_MODE: "driving",
-            CONF_ARRIVAL_TIME: "test",
-            CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-        },
-    )
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
+    assert reconfigure_successful_result["type"] is FlowResultType.ABORT
+    assert reconfigure_successful_result["reason"] == "reconfigure_successful"
     await hass.async_block_till_done()
-
-    result = await hass.config_entries.options.async_init(entry.entry_id, data=None)
-
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result["step_id"] == "init"
-
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_MODE: "driving",
-            CONF_LANGUAGE: "en",
-            CONF_AVOID: "tolls",
-            CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-            CONF_TIME_TYPE: ARRIVAL_TIME,
-            CONF_TIME: "test",
-            CONF_TRAFFIC_MODEL: "best_guess",
-            CONF_TRANSIT_MODE: "train",
-            CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    assert result["title"] == ""
-    assert result["data"] == {
-        CONF_MODE: "driving",
-        CONF_LANGUAGE: "en",
-        CONF_AVOID: "tolls",
-        CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-        CONF_ARRIVAL_TIME: "test",
-        CONF_TRAFFIC_MODEL: "best_guess",
-        CONF_TRANSIT_MODE: "train",
-        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-    }
-
-    assert entry.options == {
-        CONF_MODE: "driving",
-        CONF_LANGUAGE: "en",
-        CONF_AVOID: "tolls",
-        CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-        CONF_ARRIVAL_TIME: "test",
-        CONF_TRAFFIC_MODEL: "best_guess",
-        CONF_TRANSIT_MODE: "train",
-        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-    }
-
-
-async def test_options_flow_departure_time(hass, validate_config_entry, bypass_update):
-    """Test options flow wiith departure time."""
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-        },
-    )
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-
-    result = await hass.config_entries.options.async_init(entry.entry_id, data=None)
-
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result["step_id"] == "init"
-
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        user_input={
-            CONF_MODE: "driving",
-            CONF_LANGUAGE: "en",
-            CONF_AVOID: "tolls",
-            CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-            CONF_TIME_TYPE: DEPARTURE_TIME,
-            CONF_TIME: "test",
-            CONF_TRAFFIC_MODEL: "best_guess",
-            CONF_TRANSIT_MODE: "train",
-            CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    assert result["title"] == ""
-    assert result["data"] == {
-        CONF_MODE: "driving",
-        CONF_LANGUAGE: "en",
-        CONF_AVOID: "tolls",
-        CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-        CONF_DEPARTURE_TIME: "test",
-        CONF_TRAFFIC_MODEL: "best_guess",
-        CONF_TRANSIT_MODE: "train",
-        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-    }
-
-    assert entry.options == {
-        CONF_MODE: "driving",
-        CONF_LANGUAGE: "en",
-        CONF_AVOID: "tolls",
-        CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-        CONF_DEPARTURE_TIME: "test",
-        CONF_TRAFFIC_MODEL: "best_guess",
-        CONF_TRANSIT_MODE: "train",
-        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-    }
-
-
-async def test_dupe(hass, validate_config_entry, bypass_setup):
-    """Test setting up the same entry data twice is OK."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result["errors"] == {}
-
-    result2 = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_API_KEY: "test",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-        },
-    )
-
-    assert result2["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
-    )
-
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
-    assert result["errors"] == {}
-
-    result2 = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_API_KEY: "test",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-        },
-    )
-    await hass.async_block_till_done()
-
-    assert result2["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-
-
-async def test_import_flow(hass, validate_config_entry, bypass_update):
-    """Test import_flow."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "driving",
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
-        },
-    )
-    await hass.async_block_till_done()
-
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    assert result["title"] == "test_name"
-    assert result["data"] == {
-        CONF_API_KEY: "api_key",
-        CONF_ORIGIN: "location1",
-        CONF_DESTINATION: "location2",
-        CONF_NAME: "test_name",
-        CONF_OPTIONS: {
-            CONF_MODE: "driving",
-            CONF_LANGUAGE: "en",
-            CONF_AVOID: "tolls",
-            CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-            CONF_ARRIVAL_TIME: "test",
-            CONF_TRAFFIC_MODEL: "best_guess",
-            CONF_TRANSIT_MODE: "train",
-            CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-        },
-    }
 
     entry = hass.config_entries.async_entries(DOMAIN)[0]
-    assert entry.data == {
-        CONF_NAME: "test_name",
+    assert entry.title == DEFAULT_NAME
+    assert entry.data == RECONFIGURE_CONFIG
+
+
+async def assert_common_create_steps(
+    hass: HomeAssistant, result: ConfigFlowResult
+) -> None:
+    """Step through and assert the happy case create flow."""
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        MOCK_CONFIG,
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == DEFAULT_NAME
+    assert result["data"] == {
         CONF_API_KEY: "api_key",
         CONF_ORIGIN: "location1",
-        CONF_DESTINATION: "location2",
+        CONF_DESTINATION: "49.983862755708444,8.223882827079068",
     }
-    assert entry.options == {
+
+
+@pytest.mark.usefixtures("routes_mock", "mock_setup_entry")
+async def test_minimum_fields(hass: HomeAssistant) -> None:
+    """Test we get the form."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] is None
+
+    await assert_common_create_steps(hass, result)
+
+
+@pytest.mark.usefixtures("mock_setup_entry")
+@pytest.mark.parametrize(
+    ("exception", "error"),
+    [
+        (GoogleMapsRoutingApiError("test"), "cannot_connect"),
+        (
+            GoogleMapsRoutingApiConnectionTimeoutError("Timeout error."),
+            "timeout_connect",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError(
+                "API key not valid. Please pass a valid API key.",
+                reason="API_KEY_INVALID",
+            ),
+            "invalid_auth",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError(
+                "Routes API is disabled.",
+                status="PERMISSION_DENIED",
+                reason="SERVICE_DISABLED",
+            ),
+            "permission_denied",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError(
+                "Routes API is disabled.",
+                status="PERMISSION_DENIED",
+                reason="ACCESS_NOT_CONFIGURED",
+            ),
+            "permission_denied",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError(
+                "Requests to this API are blocked.",
+                status="PERMISSION_DENIED",
+                reason="API_KEY_SERVICE_BLOCKED",
+            ),
+            "permission_denied",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError(
+                "Billing is disabled.",
+                status="PERMISSION_DENIED",
+                reason="BILLING_DISABLED",
+            ),
+            "permission_denied",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError("Unauthenticated.", status="UNAUTHENTICATED"),
+            "invalid_auth",
+        ),
+    ],
+)
+async def test_errors(
+    hass: HomeAssistant, routes_mock: AsyncMock, exception: Exception, error: str
+) -> None:
+    """Test errors in the flow."""
+    routes_mock.async_compute_routes.side_effect = exception
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] is None
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        MOCK_CONFIG,
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": error}
+
+    routes_mock.async_compute_routes.side_effect = None
+    await assert_common_create_steps(hass, result)
+
+
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [(MOCK_CONFIG, DEFAULT_OPTIONS)],
+)
+@pytest.mark.usefixtures("mock_setup_entry")
+async def test_reconfigure(
+    hass: HomeAssistant, mock_config: MockConfigEntry, routes_mock: AsyncMock
+) -> None:
+    """Test reconfigure flow."""
+    result = await mock_config.start_reconfigure_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+
+    await assert_common_reconfigure_steps(hass, result, routes_mock)
+
+
+@pytest.mark.usefixtures("mock_setup_entry")
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [(MOCK_CONFIG, DEFAULT_OPTIONS)],
+)
+@pytest.mark.parametrize(
+    ("exception", "error"),
+    [
+        (GoogleMapsRoutingApiError("test"), "cannot_connect"),
+        (
+            GoogleMapsRoutingApiConnectionTimeoutError("Timeout error."),
+            "timeout_connect",
+        ),
+        (
+            GoogleMapsRoutingApiAuthError(
+                "API key not valid. Please pass a valid API key.",
+                reason="API_KEY_INVALID",
+            ),
+            "invalid_auth",
+        ),
+    ],
+)
+async def test_reconfigure_invalid_config_entry(
+    hass: HomeAssistant,
+    mock_config: MockConfigEntry,
+    routes_mock: AsyncMock,
+    exception: Exception,
+    error: str,
+) -> None:
+    """Test we get the form."""
+    result = await mock_config.start_reconfigure_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] is None
+
+    routes_mock.async_compute_routes.side_effect = exception
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        RECONFIGURE_CONFIG,
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": error}
+
+    routes_mock.async_compute_routes.side_effect = None
+
+    await assert_common_reconfigure_steps(hass, result, routes_mock)
+
+
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [(MOCK_CONFIG, DEFAULT_OPTIONS)],
+)
+@pytest.mark.usefixtures("routes_mock")
+async def test_options_flow(hass: HomeAssistant, mock_config: MockConfigEntry) -> None:
+    """Test options flow."""
+    result = await hass.config_entries.options.async_init(mock_config.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_LANGUAGE: "en",
+            CONF_AVOID: "tolls",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: ARRIVAL_TIME,
+            CONF_TIME: "08:00",
+            CONF_TRAFFIC_MODEL: "best_guess",
+            CONF_TRAVEL_ROUTING_PREFERENCE: "traffic_aware_optimal",
+            CONF_TRANSIT_MODE: "train",
+            CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == ""
+    assert result["data"] == {
         CONF_MODE: "driving",
         CONF_LANGUAGE: "en",
         CONF_AVOID: "tolls",
-        CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-        CONF_ARRIVAL_TIME: "test",
+        CONF_UNITS: UNITS_IMPERIAL,
+        CONF_ARRIVAL_TIME: "08:00",
+        CONF_TRAFFIC_MODEL: "best_guess",
+        CONF_TRANSIT_MODE: "train",
+        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+        CONF_TRAVEL_ROUTING_PREFERENCE: "traffic_aware_optimal",
+    }
+
+    assert mock_config.options == {
+        CONF_MODE: "driving",
+        CONF_LANGUAGE: "en",
+        CONF_AVOID: "tolls",
+        CONF_UNITS: UNITS_IMPERIAL,
+        CONF_ARRIVAL_TIME: "08:00",
+        CONF_TRAFFIC_MODEL: "best_guess",
+        CONF_TRANSIT_MODE: "train",
+        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+        CONF_TRAVEL_ROUTING_PREFERENCE: "traffic_aware_optimal",
+    }
+
+
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [(MOCK_CONFIG, DEFAULT_OPTIONS)],
+)
+@pytest.mark.usefixtures("routes_mock")
+async def test_options_flow_departure_time(
+    hass: HomeAssistant, mock_config: MockConfigEntry
+) -> None:
+    """Test options flow with departure time."""
+    result = await hass.config_entries.options.async_init(mock_config.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_LANGUAGE: "en",
+            CONF_AVOID: "tolls",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: DEPARTURE_TIME,
+            CONF_TIME: "08:00",
+            CONF_TRAFFIC_MODEL: "best_guess",
+            CONF_TRANSIT_MODE: "train",
+            CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == ""
+    assert result["data"] == {
+        CONF_MODE: "driving",
+        CONF_LANGUAGE: "en",
+        CONF_AVOID: "tolls",
+        CONF_UNITS: UNITS_IMPERIAL,
+        CONF_DEPARTURE_TIME: "08:00",
+        CONF_TRAFFIC_MODEL: "best_guess",
+        CONF_TRANSIT_MODE: "train",
+        CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+    }
+
+    assert mock_config.options == {
+        CONF_MODE: "driving",
+        CONF_LANGUAGE: "en",
+        CONF_AVOID: "tolls",
+        CONF_UNITS: UNITS_IMPERIAL,
+        CONF_DEPARTURE_TIME: "08:00",
         CONF_TRAFFIC_MODEL: "best_guess",
         CONF_TRANSIT_MODE: "train",
         CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
     }
 
 
-async def test_dupe_import_no_options(hass, bypass_update):
-    """Test duplicate import with no options."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [(MOCK_CONFIG, DEFAULT_OPTIONS)],
+)
+@pytest.mark.parametrize(
+    "travel_routing_preference",
+    ["traffic_aware", "traffic_unaware"],
+)
+@pytest.mark.parametrize(
+    "traffic_model",
+    ["best_guess", "pessimistic", "optimistic"],
+)
+@pytest.mark.usefixtures("routes_mock")
+async def test_options_flow_traffic_model_error(
+    hass: HomeAssistant,
+    mock_config: MockConfigEntry,
+    travel_routing_preference: str,
+    traffic_model: str,
+) -> None:
+    """Test options flow for traffic model error."""
+    result = await hass.config_entries.options.async_init(mock_config.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: ARRIVAL_TIME,
+            CONF_TIME: "08:00",
+            CONF_TRAFFIC_MODEL: traffic_model,
+            CONF_TRAVEL_ROUTING_PREFERENCE: travel_routing_preference,
         },
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    await hass.async_block_till_done()
 
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
+    # Verify the expected error, and the data schema contains all expected fields.
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "traffic_model_not_allowed"}
+    data_schema = result["data_schema"].schema
+    assert set(data_schema) == {
+        CONF_AVOID,
+        CONF_UNITS,
+        CONF_LANGUAGE,
+        CONF_TRANSIT_MODE,
+        CONF_TRANSIT_ROUTING_PREFERENCE,
+        CONF_MODE,
+        CONF_TIME_TYPE,
+        CONF_TIME,
+        CONF_TRAFFIC_MODEL,
+        CONF_TRAVEL_ROUTING_PREFERENCE,
+    }
+
+    # Removing the traffic model allows the user to finish the flow
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: ARRIVAL_TIME,
+            CONF_TIME: "08:00",
+            CONF_TRAVEL_ROUTING_PREFERENCE: travel_routing_preference,
         },
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_ABORT
-    assert result["reason"] == "already_configured"
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        CONF_MODE: "driving",
+        CONF_UNITS: UNITS_IMPERIAL,
+        CONF_ARRIVAL_TIME: "08:00",
+        CONF_TRAVEL_ROUTING_PREFERENCE: travel_routing_preference,
+    }
 
 
-async def test_dupe_import_default_options(hass, bypass_update):
-    """Test duplicate import with default options."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [
+        (
+            MOCK_CONFIG,
+            {
+                CONF_MODE: "driving",
+                CONF_UNITS: UNITS_IMPERIAL,
+                CONF_DEPARTURE_TIME: "08:00",
             },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    await hass.async_block_till_done()
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+        ),
+        (
+            MOCK_CONFIG,
+            {
+                CONF_MODE: "driving",
+                CONF_UNITS: UNITS_IMPERIAL,
+                CONF_ARRIVAL_TIME: "08:00",
             },
+        ),
+    ],
+)
+@pytest.mark.usefixtures("routes_mock")
+async def test_reset_departure_time(
+    hass: HomeAssistant, mock_config: MockConfigEntry
+) -> None:
+    """Test resetting departure time."""
+    result = await hass.config_entries.options.async_init(mock_config.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: DEPARTURE_TIME,
         },
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_ABORT
-    assert result["reason"] == "already_configured"
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    assert mock_config.options == {
+        CONF_MODE: "driving",
+        CONF_UNITS: UNITS_IMPERIAL,
+    }
 
 
-async def _setup_dupe_import(hass, bypass_update):
-    """Set up dupe import."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "walking",
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [
+        (
+            MOCK_CONFIG,
+            {
+                CONF_MODE: "driving",
+                CONF_UNITS: UNITS_IMPERIAL,
+                CONF_ARRIVAL_TIME: "08:00",
             },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-    await hass.async_block_till_done()
-
-
-async def test_dupe_import(hass, bypass_update):
-    """Test duplicate import."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "walking",
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+        ),
+        (
+            MOCK_CONFIG,
+            {
+                CONF_MODE: "driving",
+                CONF_UNITS: UNITS_IMPERIAL,
+                CONF_DEPARTURE_TIME: "08:00",
             },
+        ),
+    ],
+)
+@pytest.mark.usefixtures("routes_mock")
+async def test_reset_arrival_time(
+    hass: HomeAssistant, mock_config: MockConfigEntry
+) -> None:
+    """Test resetting arrival time."""
+    result = await hass.config_entries.options.async_init(mock_config.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: ARRIVAL_TIME,
         },
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_ABORT
-    assert result["reason"] == "already_configured"
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    assert mock_config.options == {
+        CONF_MODE: "driving",
+        CONF_UNITS: UNITS_IMPERIAL,
+    }
 
 
-async def test_dupe_import_false_check_data_keys(hass, bypass_update):
-    """Test false duplicate import check when data keys differ."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key2",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "walking",
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-
-
-async def test_dupe_import_false_check_no_units(hass, bypass_update):
-    """Test false duplicate import check when units aren't provided."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "walking",
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-
-
-async def test_dupe_import_false_check_units(hass, bypass_update):
-    """Test false duplicate import check when units are provided but different."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "walking",
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_METRIC,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-
-
-async def test_dupe_import_false_check_travel_mode(hass, bypass_update):
-    """Test false duplicate import check when travel mode differs."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_TRAVEL_MODE: "driving",
-            CONF_OPTIONS: {
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
-
-
-async def test_dupe_import_false_check_mode(hass, bypass_update):
-    """Test false duplicate import check when mode diiffers."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [
+        (
+            MOCK_CONFIG,
+            {
                 CONF_MODE: "driving",
                 CONF_LANGUAGE: "en",
                 CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
+                CONF_UNITS: UNITS_IMPERIAL,
+                CONF_TIME_TYPE: ARRIVAL_TIME,
+                CONF_TIME: "08:00",
                 CONF_TRAFFIC_MODEL: "best_guess",
                 CONF_TRANSIT_MODE: "train",
                 CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
+                CONF_TRAVEL_ROUTING_PREFERENCE: "traffic_aware_optimal",
             },
+        )
+    ],
+)
+@pytest.mark.usefixtures("routes_mock")
+async def test_reset_options_flow_fields(
+    hass: HomeAssistant, mock_config: MockConfigEntry
+) -> None:
+    """Test resetting options flow fields that are not time related to None."""
+    result = await hass.config_entries.options.async_init(mock_config.entry_id)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_MODE: "driving",
+            CONF_UNITS: UNITS_IMPERIAL,
+            CONF_TIME_TYPE: ARRIVAL_TIME,
+            CONF_TIME: "08:00",
         },
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    assert mock_config.options == {
+        CONF_MODE: "driving",
+        CONF_UNITS: UNITS_IMPERIAL,
+        CONF_ARRIVAL_TIME: "08:00",
+    }
 
 
-async def test_dupe_import_false_check_no_mode(hass, bypass_update):
-    """Test false duplicate import check when no mode is provided."""
-    await _setup_dupe_import(hass, bypass_update)
-
+@pytest.mark.parametrize(
+    ("data", "options"),
+    [(MOCK_CONFIG, DEFAULT_OPTIONS)],
+)
+@pytest.mark.usefixtures("routes_mock", "mock_setup_entry")
+async def test_dupe(hass: HomeAssistant, mock_config: MockConfigEntry) -> None:
+    """Test setting up the same entry data twice is OK."""
     result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] is None
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_API_KEY: "test",
             CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_LANGUAGE: "en",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
+            CONF_DESTINATION: "49.983862755708444,8.223882827079068",
         },
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
 
-
-async def test_dupe_import_false_check_options(hass, bypass_update):
-    """Test false duplicate import check when options differ."""
-    await _setup_dupe_import(hass, bypass_update)
-
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": config_entries.SOURCE_IMPORT},
-        data={
-            CONF_API_KEY: "api_key",
-            CONF_ORIGIN: "location1",
-            CONF_DESTINATION: "location2",
-            CONF_NAME: "test_name",
-            CONF_OPTIONS: {
-                CONF_MODE: "walking",
-                CONF_AVOID: "tolls",
-                CONF_UNITS: CONF_UNIT_SYSTEM_IMPERIAL,
-                CONF_ARRIVAL_TIME: "test",
-                CONF_TRAFFIC_MODEL: "best_guess",
-                CONF_TRANSIT_MODE: "train",
-                CONF_TRANSIT_ROUTING_PREFERENCE: "less_walking",
-            },
-        },
-    )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
+    assert result["type"] is FlowResultType.CREATE_ENTRY

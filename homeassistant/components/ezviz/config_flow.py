@@ -1,19 +1,30 @@
-"""Config flow for ezviz."""
-import logging
+"""Config flow for EZVIZ."""
 
-from pyezviz.client import EzvizClient
-from pyezviz.exceptions import (
+from collections.abc import Mapping
+import logging
+from typing import TYPE_CHECKING, Any, override
+
+import probatio
+from pyezvizapi.client import EzvizClient
+from pyezvizapi.exceptions import (
     AuthTestResultFailed,
-    HTTPError,
+    EzvizAuthVerificationCode,
     InvalidHost,
     InvalidURL,
     PyEzvizError,
 )
-from pyezviz.test_cam_rtsp import TestRTSPAuth
-import voluptuous as vol
+from pyezvizapi.test_cam_rtsp import TestRTSPAuth
 
-from homeassistant.config_entries import ConfigFlow, OptionsFlow
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlowWithReload,
+)
 from homeassistant.const import (
+    CONF_CODE,
     CONF_CUSTOMIZE,
     CONF_IP_ADDRESS,
     CONF_PASSWORD,
@@ -23,12 +34,20 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .const import (
     ATTR_SERIAL,
     ATTR_TYPE_CAMERA,
     ATTR_TYPE_CLOUD,
+    CONF_ENCRYPTION_PASSWORD,
     CONF_FFMPEG_ARGUMENTS,
+    CONF_RFSESSION_ID,
+    CONF_SESSION_ID,
     DEFAULT_CAMERA_USERNAME,
     DEFAULT_FFMPEG_ARGUMENTS,
     DEFAULT_TIMEOUT,
@@ -36,25 +55,30 @@ from .const import (
     EU_URL,
     RUSSIA_URL,
 )
+from .coordinator import EzvizConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+DEFAULT_OPTIONS = {
+    CONF_FFMPEG_ARGUMENTS: DEFAULT_FFMPEG_ARGUMENTS,
+    CONF_TIMEOUT: DEFAULT_TIMEOUT,
+}
 
 
-def _get_ezviz_client_instance(data):
-    """Initialize a new instance of EzvizClientApi."""
+def _validate_and_create_auth(
+    ezviz_client: EzvizClient, sms_code: int | None = None
+) -> dict[str, Any]:
+    """Log in to the EZVIZ cloud account and return the config entry data."""
+    ezviz_token = ezviz_client.login(sms_code=sms_code)
 
-    ezviz_client = EzvizClient(
-        data[CONF_USERNAME],
-        data[CONF_PASSWORD],
-        data.get(CONF_URL, EU_URL),
-        data.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),
-    )
-
-    ezviz_client.login()
-    return ezviz_client
+    return {
+        CONF_SESSION_ID: ezviz_token[CONF_SESSION_ID],
+        CONF_RFSESSION_ID: ezviz_token[CONF_RFSESSION_ID],
+        CONF_URL: ezviz_token["api_url"],
+        CONF_TYPE: ATTR_TYPE_CLOUD,
+    }
 
 
-def _test_camera_rtsp_creds(data):
+def _test_camera_rtsp_creds(data: dict) -> None:
     """Try DESCRIBE on RTSP camera with credentials."""
 
     test_rtsp = TestRTSPAuth(
@@ -65,93 +89,61 @@ def _test_camera_rtsp_creds(data):
 
 
 class EzvizConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Ezviz."""
+    """Handle a config flow for EZVIZ."""
 
     VERSION = 1
 
-    async def _validate_and_create_auth(self, data):
-        """Try to login to ezviz cloud account and create entry if successful."""
-        await self.async_set_unique_id(data[CONF_USERNAME])
-        self._abort_if_unique_id_configured()
+    ip_address: str
+    username: str | None
+    password: str | None
+    unique_id: str
+    _ezviz_client: EzvizClient
+    _reauth_entry: ConfigEntry
 
-        # Verify cloud credentials by attempting a login request.
-        try:
-            await self.hass.async_add_executor_job(_get_ezviz_client_instance, data)
+    def _create_cloud_client(self, data: dict[str, Any]) -> None:
+        """Create the cloud client, kept for the verification code step."""
+        self._ezviz_client = EzvizClient(
+            data[CONF_USERNAME],
+            data[CONF_PASSWORD],
+            data[CONF_URL],
+            data.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),
+        )
 
-        except InvalidURL as err:
-            raise InvalidURL from err
-
-        except HTTPError as err:
-            raise InvalidHost from err
-
-        except PyEzvizError as err:
-            raise PyEzvizError from err
-
-        auth_data = {
-            CONF_USERNAME: data[CONF_USERNAME],
-            CONF_PASSWORD: data[CONF_PASSWORD],
-            CONF_URL: data.get(CONF_URL, EU_URL),
-            CONF_TYPE: ATTR_TYPE_CLOUD,
-        }
-
-        return self.async_create_entry(title=data[CONF_USERNAME], data=auth_data)
-
-    async def _validate_and_create_camera_rtsp(self, data):
+    async def _validate_and_create_camera_rtsp(self, data: dict) -> ConfigFlowResult:
         """Try DESCRIBE on RTSP camera with credentials."""
 
-        # Get Ezviz cloud credentials from config entry
-        ezviz_client_creds = {
-            CONF_USERNAME: None,
-            CONF_PASSWORD: None,
-            CONF_URL: None,
+        # Get EZVIZ cloud credentials from config entry
+        ezviz_token = {
+            CONF_SESSION_ID: None,
+            CONF_RFSESSION_ID: None,
+            "api_url": None,
         }
+        ezviz_timeout = DEFAULT_TIMEOUT
 
         for item in self._async_current_entries():
             if item.data.get(CONF_TYPE) == ATTR_TYPE_CLOUD:
-                ezviz_client_creds = {
-                    CONF_USERNAME: item.data.get(CONF_USERNAME),
-                    CONF_PASSWORD: item.data.get(CONF_PASSWORD),
-                    CONF_URL: item.data.get(CONF_URL),
+                ezviz_token = {
+                    CONF_SESSION_ID: item.data.get(CONF_SESSION_ID),
+                    CONF_RFSESSION_ID: item.data.get(CONF_RFSESSION_ID),
+                    "api_url": item.data.get(CONF_URL),
                 }
+                ezviz_timeout = item.data.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)
 
         # Abort flow if user removed cloud account before adding camera.
-        if ezviz_client_creds[CONF_USERNAME] is None:
+        if ezviz_token.get(CONF_SESSION_ID) is None:
             return self.async_abort(reason="ezviz_cloud_account_missing")
 
-        # We need to wake hibernating cameras.
-        # First create EZVIZ API instance.
-        try:
-            ezviz_client = await self.hass.async_add_executor_job(
-                _get_ezviz_client_instance, ezviz_client_creds
-            )
+        ezviz_client = EzvizClient(token=ezviz_token, timeout=ezviz_timeout)
 
-        except InvalidURL as err:
-            raise InvalidURL from err
+        def _login_wake_and_test() -> None:
+            # Login to create EZVIZ API instance.
+            ezviz_client.login()
+            # Wake hibernating camera.
+            ezviz_client.get_detection_sensibility(data[ATTR_SERIAL])
+            # Attempt an authenticated RTSP DESCRIBE request.
+            _test_camera_rtsp_creds(data)
 
-        except HTTPError as err:
-            raise InvalidHost from err
-
-        except PyEzvizError as err:
-            raise PyEzvizError from err
-
-        # Secondly try to wake hybernating camera.
-        try:
-            await self.hass.async_add_executor_job(
-                ezviz_client.get_detection_sensibility, data[ATTR_SERIAL]
-            )
-
-        except HTTPError as err:
-            raise InvalidHost from err
-
-        # Thirdly attempts an authenticated RTSP DESCRIBE request.
-        try:
-            await self.hass.async_add_executor_job(_test_camera_rtsp_creds, data)
-
-        except InvalidHost as err:
-            raise InvalidHost from err
-
-        except AuthTestResultFailed as err:
-            raise AuthTestResultFailed from err
+        await self.hass.async_add_executor_job(_login_wake_and_test)
 
         return self.async_create_entry(
             title=data[ATTR_SERIAL],
@@ -160,58 +152,83 @@ class EzvizConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_PASSWORD: data[CONF_PASSWORD],
                 CONF_TYPE: ATTR_TYPE_CAMERA,
             },
+            options=DEFAULT_OPTIONS,
         )
+
+    async def _async_validate_cloud_auth(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """Log in to the EZVIZ cloud and return the auth data and form errors.
+
+        Raises EzvizAuthVerificationCode when the account requires a verification code.
+        """
+        self._create_cloud_client(data)
+        try:
+            auth_data = await self.hass.async_add_executor_job(
+                _validate_and_create_auth, self._ezviz_client
+            )
+        except InvalidURL:
+            return {}, {"base": "invalid_host"}
+        except InvalidHost:
+            return {}, {"base": "cannot_connect"}
+        except EzvizAuthVerificationCode:
+            raise
+        except PyEzvizError:
+            return {}, {"base": "invalid_auth"}
+        return auth_data, {}
 
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
+    @override
+    def async_get_options_flow(
+        config_entry: EzvizConfigEntry,
+    ) -> EzvizOptionsFlowHandler:
         """Get the options flow for this handler."""
-        return EzvizOptionsFlowHandler(config_entry)
+        return EzvizOptionsFlowHandler()
 
-    async def async_step_user(self, user_input=None):
+    @override
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle a flow initiated by the user."""
 
-        # Check if ezviz cloud account is present in entry config,
+        # Check if EZVIZ cloud account is present in entry config,
         # abort if already configured.
         for item in self._async_current_entries():
             if item.data.get(CONF_TYPE) == ATTR_TYPE_CLOUD:
                 return self.async_abort(reason="already_configured_account")
 
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
+            await self.async_set_unique_id(user_input[CONF_USERNAME])
+            self._abort_if_unique_id_configured()
 
             if user_input[CONF_URL] == CONF_CUSTOMIZE:
-                self.context["data"] = {
-                    CONF_USERNAME: user_input[CONF_USERNAME],
-                    CONF_PASSWORD: user_input[CONF_PASSWORD],
-                }
+                self.username = user_input[CONF_USERNAME]
+                self.password = user_input[CONF_PASSWORD]
                 return await self.async_step_user_custom_url()
 
-            if CONF_TIMEOUT not in user_input:
-                user_input[CONF_TIMEOUT] = DEFAULT_TIMEOUT
-
             try:
-                return await self._validate_and_create_auth(user_input)
-
-            except InvalidURL:
-                errors["base"] = "invalid_host"
-
-            except InvalidHost:
-                errors["base"] = "cannot_connect"
-
-            except PyEzvizError:
-                errors["base"] = "invalid_auth"
-
-            except Exception:  # pylint: disable=broad-except
+                auth_data, errors = await self._async_validate_cloud_auth(user_input)
+            except EzvizAuthVerificationCode:
+                return await self.async_step_mfa()
+            except Exception:
                 _LOGGER.exception("Unexpected exception")
                 return self.async_abort(reason="unknown")
 
-        data_schema = vol.Schema(
+            if not errors:
+                return self.async_create_entry(
+                    title=user_input[CONF_USERNAME],
+                    data=auth_data,
+                    options=DEFAULT_OPTIONS,
+                )
+
+        data_schema = probatio.Schema(
             {
-                vol.Required(CONF_USERNAME): str,
-                vol.Required(CONF_PASSWORD): str,
-                vol.Required(CONF_URL, default=EU_URL): vol.In(
+                probatio.Required(CONF_USERNAME): str,
+                probatio.Required(probatio.Secret(CONF_PASSWORD)): str,
+                probatio.Required(CONF_URL, default=EU_URL): probatio.In(
                     [EU_URL, RUSSIA_URL, CONF_CUSTOMIZE]
                 ),
             }
@@ -221,37 +238,34 @@ class EzvizConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user", data_schema=data_schema, errors=errors
         )
 
-    async def async_step_user_custom_url(self, user_input=None):
+    async def async_step_user_custom_url(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle a flow initiated by the user for custom region url."""
-
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            user_input[CONF_USERNAME] = self.context["data"][CONF_USERNAME]
-            user_input[CONF_PASSWORD] = self.context["data"][CONF_PASSWORD]
-
-            if CONF_TIMEOUT not in user_input:
-                user_input[CONF_TIMEOUT] = DEFAULT_TIMEOUT
+            user_input[CONF_USERNAME] = self.username
+            user_input[CONF_PASSWORD] = self.password
 
             try:
-                return await self._validate_and_create_auth(user_input)
-
-            except InvalidURL:
-                errors["base"] = "invalid_host"
-
-            except InvalidHost:
-                errors["base"] = "cannot_connect"
-
-            except PyEzvizError:
-                errors["base"] = "invalid_auth"
-
-            except Exception:  # pylint: disable=broad-except
+                auth_data, errors = await self._async_validate_cloud_auth(user_input)
+            except EzvizAuthVerificationCode:
+                return await self.async_step_mfa()
+            except Exception:
                 _LOGGER.exception("Unexpected exception")
                 return self.async_abort(reason="unknown")
 
-        data_schema_custom_url = vol.Schema(
+            if not errors:
+                return self.async_create_entry(
+                    title=user_input[CONF_USERNAME],
+                    data=auth_data,
+                    options=DEFAULT_OPTIONS,
+                )
+
+        data_schema_custom_url = probatio.Schema(
             {
-                vol.Required(CONF_URL, default=EU_URL): str,
+                probatio.Required(CONF_URL, default=EU_URL): str,
             }
         )
 
@@ -259,41 +273,52 @@ class EzvizConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user_custom_url", data_schema=data_schema_custom_url, errors=errors
         )
 
-    async def async_step_discovery(self, discovery_info):
+    @override
+    async def async_step_integration_discovery(
+        self, discovery_info: dict[str, Any]
+    ) -> ConfigFlowResult:
         """Handle a flow for discovered camera without rtsp config entry."""
 
         await self.async_set_unique_id(discovery_info[ATTR_SERIAL])
         self._abort_if_unique_id_configured()
 
+        if TYPE_CHECKING:
+            # A unique ID is passed in via the discovery info
+            assert self.unique_id is not None
         self.context["title_placeholders"] = {"serial": self.unique_id}
-        self.context["data"] = {CONF_IP_ADDRESS: discovery_info[CONF_IP_ADDRESS]}
+        self.ip_address = discovery_info[CONF_IP_ADDRESS]
 
         return await self.async_step_confirm()
 
-    async def async_step_confirm(self, user_input=None):
+    async def async_step_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Confirm and create entry from discovery step."""
         errors = {}
 
         if user_input is not None:
             user_input[ATTR_SERIAL] = self.unique_id
-            user_input[CONF_IP_ADDRESS] = self.context["data"][CONF_IP_ADDRESS]
+            user_input[CONF_IP_ADDRESS] = self.ip_address
             try:
                 return await self._validate_and_create_camera_rtsp(user_input)
 
-            except (InvalidHost, InvalidURL):
+            except InvalidHost, InvalidURL:
                 errors["base"] = "invalid_host"
 
-            except (PyEzvizError, AuthTestResultFailed):
+            except EzvizAuthVerificationCode:
+                errors["base"] = "mfa_required"
+
+            except PyEzvizError, AuthTestResultFailed:
                 errors["base"] = "invalid_auth"
 
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _LOGGER.exception("Unexpected exception")
                 return self.async_abort(reason="unknown")
 
-        discovered_camera_schema = vol.Schema(
+        discovered_camera_schema = probatio.Schema(
             {
-                vol.Required(CONF_USERNAME, default=DEFAULT_CAMERA_USERNAME): str,
-                vol.Required(CONF_PASSWORD): str,
+                probatio.Required(CONF_USERNAME, default=DEFAULT_CAMERA_USERNAME): str,
+                probatio.Required(probatio.Secret(CONF_PASSWORD)): str,
             }
         )
 
@@ -303,78 +328,203 @@ class EzvizConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "serial": self.unique_id,
-                CONF_IP_ADDRESS: self.context["data"][CONF_IP_ADDRESS],
+                "ip_address": self.ip_address,
             },
         )
 
-    async def async_step_import(self, import_config):
-        """Handle config import from yaml."""
-        _LOGGER.debug("import config: %s", import_config)
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle a flow for reauthentication with password."""
 
-        # Check importing camera.
-        if ATTR_SERIAL in import_config:
-            return await self.async_step_import_camera(import_config)
+        return await self.async_step_reauth_confirm()
 
-        # Validate and setup of main ezviz cloud account.
-        try:
-            return await self._validate_and_create_auth(import_config)
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle a Confirm flow for reauthentication with password."""
+        auth_data = {}
+        errors = {}
+        entry = None
 
-        except InvalidURL:
-            _LOGGER.error("Error importing Ezviz platform config: invalid host")
-            return self.async_abort(reason="invalid_host")
+        for item in self._async_current_entries():
+            if item.data.get(CONF_TYPE) == ATTR_TYPE_CLOUD:
+                self.context["title_placeholders"] = {"serial": item.title}
+                entry = await self.async_set_unique_id(item.title)
 
-        except InvalidHost:
-            _LOGGER.error("Error importing Ezviz platform config: cannot connect")
-            return self.async_abort(reason="cannot_connect")
+        if not entry:
+            return self.async_abort(reason="ezviz_cloud_account_missing")
 
-        except (AuthTestResultFailed, PyEzvizError):
-            _LOGGER.error("Error importing Ezviz platform config: invalid auth")
-            return self.async_abort(reason="invalid_auth")
+        if user_input is not None:
+            user_input[CONF_URL] = entry.data[CONF_URL]
+            self._create_cloud_client(user_input)
 
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception(
-                "Error importing ezviz platform config: unexpected exception"
-            )
+            try:
+                auth_data = await self.hass.async_add_executor_job(
+                    _validate_and_create_auth, self._ezviz_client
+                )
 
-        return self.async_abort(reason="unknown")
+            except InvalidHost, InvalidURL:
+                errors["base"] = "invalid_host"
 
-    async def async_step_import_camera(self, data):
-        """Create RTSP auth entry per camera in config."""
+            except EzvizAuthVerificationCode:
+                self._reauth_entry = entry
+                return await self.async_step_mfa()
 
-        await self.async_set_unique_id(data[ATTR_SERIAL])
-        self._abort_if_unique_id_configured()
+            except PyEzvizError, AuthTestResultFailed:
+                errors["base"] = "invalid_auth"
 
-        _LOGGER.debug("Create camera with: %s", data)
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                return self.async_abort(reason="unknown")
 
-        cam_serial = data.pop(ATTR_SERIAL)
-        data[CONF_TYPE] = ATTR_TYPE_CAMERA
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data=auth_data,
+                )
 
-        return self.async_create_entry(title=cam_serial, data=data)
+        data_schema = probatio.Schema(
+            {
+                probatio.Required(CONF_USERNAME, default=entry.title): probatio.In(
+                    [entry.title]
+                ),
+                probatio.Required(probatio.Secret(CONF_PASSWORD)): str,
+            }
+        )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle reconfiguration of the EZVIZ cloud account."""
+        reconfigure_entry = self._get_reconfigure_entry()
+        if reconfigure_entry.data[CONF_TYPE] != ATTR_TYPE_CLOUD:
+            return self.async_abort(reason="reconfigure_camera_not_supported")
+
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            try:
+                auth_data, errors = await self._async_validate_cloud_auth(
+                    {**user_input, CONF_USERNAME: reconfigure_entry.unique_id}
+                )
+            except EzvizAuthVerificationCode:
+                return await self.async_step_mfa()
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors = {"base": "unknown"}
+
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry, data_updates=auth_data
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                probatio.Schema(
+                    {
+                        probatio.Required(probatio.Secret(CONF_PASSWORD)): str,
+                        probatio.Required(CONF_URL): str,
+                    }
+                ),
+                {CONF_URL: reconfigure_entry.data[CONF_URL]},
+            ),
+            errors=errors,
+            description_placeholders={"username": reconfigure_entry.title},
+        )
+
+    async def async_step_mfa(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the verification code of an account with 2FA enabled."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            code = user_input[CONF_CODE].strip()
+            if not code.isdecimal():
+                errors["base"] = "invalid_mfa_code"
+            else:
+                try:
+                    auth_data = await self.hass.async_add_executor_job(
+                        _validate_and_create_auth, self._ezviz_client, int(code)
+                    )
+                except InvalidURL:
+                    errors["base"] = "invalid_host"
+                except InvalidHost:
+                    errors["base"] = "cannot_connect"
+                except PyEzvizError:
+                    errors["base"] = "invalid_mfa_code"
+                except Exception:
+                    _LOGGER.exception("Unexpected exception")
+                    return self.async_abort(reason="unknown")
+                else:
+                    if self.source == SOURCE_REAUTH:
+                        return self.async_update_reload_and_abort(
+                            self._reauth_entry, data=auth_data
+                        )
+                    if self.source == SOURCE_RECONFIGURE:
+                        return self.async_update_reload_and_abort(
+                            self._get_reconfigure_entry(), data_updates=auth_data
+                        )
+                    # Another flow can add a cloud account while this flow waits
+                    # for the code.
+                    for item in self._async_current_entries():
+                        if item.data.get(CONF_TYPE) == ATTR_TYPE_CLOUD:
+                            return self.async_abort(reason="already_configured_account")
+                    return self.async_create_entry(
+                        title=self.unique_id,
+                        data=auth_data,
+                        options=DEFAULT_OPTIONS,
+                    )
+
+        return self.async_show_form(
+            step_id="mfa",
+            data_schema=probatio.Schema({probatio.Required(CONF_CODE): str}),
+            errors=errors,
+        )
 
 
-class EzvizOptionsFlowHandler(OptionsFlow):
-    """Handle Ezviz client options."""
+class EzvizOptionsFlowHandler(OptionsFlowWithReload):
+    """Handle EZVIZ client options."""
 
-    def __init__(self, config_entry):
-        """Initialize options flow."""
-        self.config_entry = config_entry
-
-    async def async_step_init(self, user_input=None):
-        """Manage Ezviz options."""
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage EZVIZ options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        options = {
-            vol.Optional(
+        fields: dict[probatio.Marker, Any] = {
+            probatio.Optional(
                 CONF_TIMEOUT,
                 default=self.config_entry.options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),
             ): int,
-            vol.Optional(
+            probatio.Optional(
                 CONF_FFMPEG_ARGUMENTS,
                 default=self.config_entry.options.get(
                     CONF_FFMPEG_ARGUMENTS, DEFAULT_FFMPEG_ARGUMENTS
                 ),
             ): str,
         }
+        # Alarm pictures can be encrypted with a password that differs from
+        # the verification code used for the RTSP stream.
+        if self.config_entry.data[CONF_TYPE] == ATTR_TYPE_CAMERA:
+            fields[
+                probatio.Optional(
+                    CONF_ENCRYPTION_PASSWORD,
+                    description={
+                        "suggested_value": self.config_entry.options.get(
+                            CONF_ENCRYPTION_PASSWORD
+                        )
+                    },
+                )
+            ] = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(options))
+        return self.async_show_form(step_id="init", data_schema=probatio.Schema(fields))

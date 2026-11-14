@@ -1,107 +1,35 @@
 """Support for Keenetic routers as device tracker."""
-from __future__ import annotations
 
-from datetime import timedelta
 import logging
+from typing import Any, override
 
 from ndms2_client import Device
-import voluptuous as vol
 
 from homeassistant.components.device_tracker import (
     DOMAIN as DEVICE_TRACKER_DOMAIN,
-    PLATFORM_SCHEMA as DEVICE_TRACKER_SCHEMA,
-    SOURCE_TYPE_ROUTER,
-)
-from homeassistant.components.device_tracker.config_entry import ScannerEntity
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import (
-    CONF_HOST,
-    CONF_PASSWORD,
-    CONF_PORT,
-    CONF_SCAN_INTERVAL,
-    CONF_USERNAME,
+    ScannerEntity,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import DeviceInfo
-import homeassistant.util.dt as dt_util
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
-from .const import (
-    CONF_CONSIDER_HOME,
-    CONF_INTERFACES,
-    CONF_LEGACY_INTERFACE,
-    DEFAULT_CONSIDER_HOME,
-    DEFAULT_INTERFACE,
-    DEFAULT_SCAN_INTERVAL,
-    DEFAULT_TELNET_PORT,
-    DOMAIN,
-    ROUTER,
-)
-from .router import KeeneticRouter
+from .router import KeeneticConfigEntry, KeeneticRouter
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORM_SCHEMA = DEVICE_TRACKER_SCHEMA.extend(
-    {
-        vol.Required(CONF_HOST): cv.string,
-        vol.Required(CONF_USERNAME): cv.string,
-        vol.Required(CONF_PORT, default=DEFAULT_TELNET_PORT): cv.port,
-        vol.Required(CONF_PASSWORD): cv.string,
-        vol.Required(CONF_LEGACY_INTERFACE, default=DEFAULT_INTERFACE): cv.string,
-    }
-)
-
-
-async def async_get_scanner(hass: HomeAssistant, config):
-    """Import legacy configuration from YAML."""
-
-    scanner_config = config[DEVICE_TRACKER_DOMAIN]
-    scan_interval: timedelta | None = scanner_config.get(CONF_SCAN_INTERVAL)
-    consider_home: timedelta | None = scanner_config.get(CONF_CONSIDER_HOME)
-
-    host: str = scanner_config[CONF_HOST]
-    hass.data[DOMAIN][f"imported_options_{host}"] = {
-        CONF_INTERFACES: [scanner_config[CONF_LEGACY_INTERFACE]],
-        CONF_SCAN_INTERVAL: int(scan_interval.total_seconds())
-        if scan_interval
-        else DEFAULT_SCAN_INTERVAL,
-        CONF_CONSIDER_HOME: int(consider_home.total_seconds())
-        if consider_home
-        else DEFAULT_CONSIDER_HOME,
-    }
-
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={"source": SOURCE_IMPORT},
-            data={
-                CONF_HOST: scanner_config[CONF_HOST],
-                CONF_PORT: scanner_config[CONF_PORT],
-                CONF_USERNAME: scanner_config[CONF_USERNAME],
-                CONF_PASSWORD: scanner_config[CONF_PASSWORD],
-            },
-        )
-    )
-
-    _LOGGER.warning(
-        "Your Keenetic NDMS2 configuration has been imported into the UI, "
-        "please remove it from configuration.yaml. "
-        "Loading Keenetic NDMS2 via scanner setup is now deprecated"
-    )
-
-    return None
-
 
 async def async_setup_entry(
-    hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities
-):
+    hass: HomeAssistant,
+    config_entry: KeeneticConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
     """Set up device tracker for Keenetic NDMS2 component."""
-    router: KeeneticRouter = hass.data[DOMAIN][config_entry.entry_id][ROUTER]
+    router = config_entry.runtime_data
 
-    tracked = set()
+    tracked: set[str] = set()
 
     @callback
     def update_from_router():
@@ -110,23 +38,31 @@ async def async_setup_entry(
 
     update_from_router()
 
-    registry = await entity_registry.async_get_registry(hass)
+    registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
     # Restore devices that are not a part of active clients list.
     restored = []
-    for entity_entry in registry.entities.values():
-        if (
-            entity_entry.config_entry_id == config_entry.entry_id
-            and entity_entry.domain == DEVICE_TRACKER_DOMAIN
-        ):
+    for entity_entry in registry.entities.get_entries_for_config_entry_id(
+        config_entry.entry_id
+    ):
+        if entity_entry.domain == DEVICE_TRACKER_DOMAIN:
             mac = entity_entry.unique_id.partition("_")[0]
             if mac not in tracked:
                 tracked.add(mac)
+                # Only set for trackers not added since their device carries the
+                # client name, can be removed in HA Core 2027.5
+                name = entity_entry.original_name
+                if (
+                    name is None
+                    and entity_entry.device_id
+                    and (device := device_registry.async_get(entity_entry.device_id))
+                ):
+                    name = device.name
                 restored.append(
                     KeeneticTracker(
                         Device(
                             mac=mac,
-                            # restore the original name as set by the router before
-                            name=entity_entry.original_name,
+                            name=name,
                             ip=None,
                             interface=None,
                         ),
@@ -134,10 +70,11 @@ async def async_setup_entry(
                     )
                 )
 
-    if restored:
-        async_add_entities(restored)
+    async_add_entities(restored)
 
-    async_dispatcher_connect(hass, router.signal_update, update_from_router)
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, router.signal_update, update_from_router)
+    )
 
 
 @callback
@@ -149,67 +86,63 @@ def update_items(router: KeeneticRouter, async_add_entities, tracked: set[str]):
             tracked.add(mac)
             new_tracked.append(KeeneticTracker(device, router))
 
-    if new_tracked:
-        async_add_entities(new_tracked)
+    async_add_entities(new_tracked)
 
 
 class KeeneticTracker(ScannerEntity):
     """Representation of network device."""
 
+    _attr_should_poll = False
+
     def __init__(self, device: Device, router: KeeneticRouter) -> None:
         """Initialize the tracked device."""
         self._device = device
         self._router = router
+        self._attr_device_info = DeviceInfo(
+            connections={(dr.CONNECTION_NETWORK_MAC, device.mac)},
+            name=device.name or device.mac,
+        )
         self._last_seen = (
             dt_util.utcnow() if device.mac in router.last_devices else None
         )
 
     @property
-    def should_poll(self) -> bool:
-        """Return False since entity pushes its state to HA."""
-        return False
-
-    @property
-    def is_connected(self):
+    @override
+    def is_connected(self) -> bool:
         """Return true if the device is connected to the network."""
         return (
-            self._last_seen
+            self._last_seen is not None
             and (dt_util.utcnow() - self._last_seen)
             < self._router.consider_home_interval
         )
 
     @property
-    def source_type(self):
-        """Return the source type of the client."""
-        return SOURCE_TYPE_ROUTER
-
-    @property
-    def name(self) -> str:
-        """Return the name of the device."""
-        return self._device.name or self._device.mac
-
-    @property
+    @override
     def unique_id(self) -> str:
         """Return a unique identifier for this device."""
         return f"{self._device.mac}_{self._router.config_entry.entry_id}"
 
     @property
-    def ip_address(self) -> str:
+    @override
+    def ip_address(self) -> str | None:
         """Return the primary ip address of the device."""
         return self._device.ip if self.is_connected else None
 
     @property
+    @override
     def mac_address(self) -> str:
         """Return the mac address of the device."""
         return self._device.mac
 
     @property
+    @override
     def available(self) -> bool:
         """Return if controller is available."""
         return self._router.available
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the device state attributes."""
         if self.is_connected:
             return {
@@ -217,21 +150,15 @@ class KeeneticTracker(ScannerEntity):
             }
         return None
 
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return a client description for device registry."""
-        return DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, self._device.mac)},
-            identifiers={(DOMAIN, self._device.mac)},
-            name=self._device.name if self._device.name else None,
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Client entity created."""
+        _LOGGER.debug(
+            "New network device tracker %s (%s)", self.entity_id, self.unique_id
         )
 
-    async def async_added_to_hass(self):
-        """Client entity created."""
-        _LOGGER.debug("New network device tracker %s (%s)", self.name, self.unique_id)
-
         @callback
-        def update_device():
+        def update_device() -> None:
             _LOGGER.debug(
                 "Updating Keenetic tracked device %s (%s)",
                 self.entity_id,
@@ -241,6 +168,14 @@ class KeeneticTracker(ScannerEntity):
             if new_device:
                 self._device = new_device
                 self._last_seen = dt_util.utcnow()
+                if (
+                    new_device.name
+                    and (device_entry := self.device_entry)
+                    and device_entry.name != new_device.name
+                ):
+                    dr.async_get(self.hass).async_update_device(
+                        device_entry.id, name=new_device.name
+                    )
 
             self.async_write_ha_state()
 

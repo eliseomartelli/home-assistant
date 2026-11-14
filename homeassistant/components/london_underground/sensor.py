@@ -1,89 +1,67 @@
 """Sensor for checking the status of London Underground tube lines."""
-from datetime import timedelta
 
-from london_tube_status import TubeData
-import voluptuous as vol
+import logging
+from typing import Any, override
 
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
-from homeassistant.const import ATTR_ATTRIBUTION
-import homeassistant.helpers.config_validation as cv
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-ATTRIBUTION = "Powered by TfL Open Data"
+from .const import CONF_LINE, DOMAIN
+from .coordinator import LondonTubeCoordinator, LondonUndergroundConfigEntry
 
-CONF_LINE = "line"
-
-ICON = "mdi:subway"
-
-SCAN_INTERVAL = timedelta(seconds=30)
-
-TUBE_LINES = [
-    "Bakerloo",
-    "Central",
-    "Circle",
-    "District",
-    "DLR",
-    "Hammersmith & City",
-    "Jubilee",
-    "London Overground",
-    "Metropolitan",
-    "Northern",
-    "Piccadilly",
-    "TfL Rail",
-    "Victoria",
-    "Waterloo & City",
-]
-
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {vol.Required(CONF_LINE): vol.All(cv.ensure_list, [vol.In(list(TUBE_LINES))])}
-)
+_LOGGER = logging.getLogger(__name__)
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    """Set up the Tube sensor."""
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: LondonUndergroundConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Set up the London Underground sensor from config entry."""
 
-    data = TubeData()
-    data.update()
-    sensors = []
-    for line in config.get(CONF_LINE):
-        sensors.append(LondonTubeSensor(line, data))
-
-    add_entities(sensors, True)
+    async_add_entities(
+        LondonTubeSensor(entry.runtime_data, line) for line in entry.options[CONF_LINE]
+    )
 
 
-class LondonTubeSensor(SensorEntity):
+class LondonTubeSensor(CoordinatorEntity[LondonTubeCoordinator], SensorEntity):
     """Sensor that reads the status of a line from Tube Data."""
 
-    def __init__(self, name, data):
+    _attr_attribution = "Powered by TfL Open Data"
+    _attr_icon = "mdi:subway"
+    _attr_has_entity_name = True  # Use modern entity naming
+
+    def __init__(self, coordinator: LondonTubeCoordinator, name: str) -> None:
         """Initialize the London Underground sensor."""
-        self._data = data
-        self._description = None
+        super().__init__(coordinator)
         self._name = name
-        self._state = None
-        self.attrs = {ATTR_ATTRIBUTION: ATTRIBUTION}
+        # Add unique_id for proper entity registry
+        self._attr_unique_id = f"tube_{name.lower().replace(' ', '_')}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, DOMAIN)},
+            name="London Underground",
+            manufacturer="Transport for London",
+            model="Tube Status",
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
     @property
-    def name(self):
+    @override
+    def name(self) -> str:
         """Return the name of the sensor."""
         return self._name
 
     @property
-    def native_value(self):
+    @override
+    def native_value(self) -> str:
         """Return the state of the sensor."""
-        return self._state
+        return self.coordinator.data[self.name]["State"]
 
     @property
-    def icon(self):
-        """Icon to use in the frontend, if any."""
-        return ICON
-
-    @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return other details about the sensor state."""
-        self.attrs["Description"] = self._description
-        return self.attrs
-
-    def update(self):
-        """Update the sensor."""
-        self._data.update()
-        self._state = self._data.data[self.name]["State"]
-        self._description = self._data.data[self.name]["Description"]
+        return {"Description": self.coordinator.data[self.name]["Description"]}

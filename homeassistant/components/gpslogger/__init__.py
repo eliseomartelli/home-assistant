@@ -1,16 +1,16 @@
 """Support for GPSLogger."""
+
 from http import HTTPStatus
 
 from aiohttp import web
-import voluptuous as vol
+import probatio
 
-from homeassistant.components.device_tracker import (
-    ATTR_BATTERY,
-    DOMAIN as DEVICE_TRACKER,
-)
-from homeassistant.const import ATTR_LATITUDE, ATTR_LONGITUDE, CONF_WEBHOOK_ID
-from homeassistant.helpers import config_entry_flow
-import homeassistant.helpers.config_validation as cv
+from homeassistant.components import webhook
+from homeassistant.components.device_tracker import ATTR_BATTERY
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_WEBHOOK_ID, Platform
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_entry_flow, config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
@@ -24,11 +24,15 @@ from .const import (
     DOMAIN,
 )
 
-PLATFORMS = [DEVICE_TRACKER]
+type GPSLoggerConfigEntry = ConfigEntry[set[str]]
+
+PLATFORMS = [Platform.DEVICE_TRACKER]
 
 TRACKER_UPDATE = f"{DOMAIN}_tracker_update"
 
 
+ATTR_LATITUDE = "latitude"
+ATTR_LONGITUDE = "longitude"
 DEFAULT_ACCURACY = 200
 DEFAULT_BATTERY = -1
 
@@ -38,33 +42,33 @@ def _id(value: str) -> str:
     return value.replace("-", "")
 
 
-WEBHOOK_SCHEMA = vol.Schema(
+WEBHOOK_SCHEMA = probatio.Schema(
     {
-        vol.Required(ATTR_DEVICE): _id,
-        vol.Required(ATTR_LATITUDE): cv.latitude,
-        vol.Required(ATTR_LONGITUDE): cv.longitude,
-        vol.Optional(ATTR_ACCURACY, default=DEFAULT_ACCURACY): vol.Coerce(float),
-        vol.Optional(ATTR_ACTIVITY): cv.string,
-        vol.Optional(ATTR_ALTITUDE): vol.Coerce(float),
-        vol.Optional(ATTR_BATTERY, default=DEFAULT_BATTERY): vol.Coerce(float),
-        vol.Optional(ATTR_DIRECTION): vol.Coerce(float),
-        vol.Optional(ATTR_PROVIDER): cv.string,
-        vol.Optional(ATTR_SPEED): vol.Coerce(float),
+        probatio.Required(ATTR_DEVICE): _id,
+        probatio.Required(ATTR_LATITUDE): cv.latitude,
+        probatio.Required(ATTR_LONGITUDE): cv.longitude,
+        probatio.Optional(ATTR_ACCURACY, default=DEFAULT_ACCURACY): probatio.Coerce(
+            float
+        ),
+        probatio.Optional(ATTR_ACTIVITY): cv.string,
+        probatio.Optional(ATTR_ALTITUDE): probatio.Coerce(float),
+        probatio.Optional(ATTR_BATTERY, default=DEFAULT_BATTERY): probatio.Coerce(
+            float
+        ),
+        probatio.Optional(ATTR_DIRECTION): probatio.Coerce(float),
+        probatio.Optional(ATTR_PROVIDER): cv.string,
+        probatio.Optional(ATTR_SPEED): probatio.Coerce(float),
     }
 )
 
 
-async def async_setup(hass, hass_config):
-    """Set up the GPSLogger component."""
-    hass.data[DOMAIN] = {"devices": set(), "unsub_device_tracker": {}}
-    return True
-
-
-async def handle_webhook(hass, webhook_id, request):
+async def handle_webhook(
+    hass: HomeAssistant, webhook_id: str, request: web.Request
+) -> web.Response:
     """Handle incoming webhook with GPSLogger request."""
     try:
         data = WEBHOOK_SCHEMA(dict(await request.post()))
-    except vol.MultipleInvalid as error:
+    except probatio.MultipleInvalid as error:
         return web.Response(
             text=error.error_message, status=HTTPStatus.UNPROCESSABLE_ENTITY
         )
@@ -92,22 +96,20 @@ async def handle_webhook(hass, webhook_id, request):
     return web.Response(text=f"Setting location for {device}")
 
 
-async def async_setup_entry(hass, entry):
+async def async_setup_entry(hass: HomeAssistant, entry: GPSLoggerConfigEntry) -> None:
     """Configure based on config entry."""
-    hass.components.webhook.async_register(
-        DOMAIN, "GPSLogger", entry.data[CONF_WEBHOOK_ID], handle_webhook
+    entry.runtime_data = set()
+    webhook.async_register(
+        hass, DOMAIN, "GPSLogger", entry.data[CONF_WEBHOOK_ID], handle_webhook
     )
 
-    hass.config_entries.async_setup_platforms(entry, PLATFORMS)
-
-    return True
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
 
-async def async_unload_entry(hass, entry):
+async def async_unload_entry(hass: HomeAssistant, entry: GPSLoggerConfigEntry) -> None:
     """Unload a config entry."""
-    hass.components.webhook.async_unregister(entry.data[CONF_WEBHOOK_ID])
-    hass.data[DOMAIN]["unsub_device_tracker"].pop(entry.entry_id)()
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    webhook.async_unregister(hass, entry.data[CONF_WEBHOOK_ID])
+    await hass.config_entries.async_unload_platforms_or_raise(entry, PLATFORMS)
 
 
 async_remove_entry = config_entry_flow.webhook_async_remove_entry

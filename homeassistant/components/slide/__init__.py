@@ -4,7 +4,7 @@ from datetime import timedelta
 import logging
 
 from goslideapi import GoSlideCloud, goslideapi
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import (
     CONF_PASSWORD,
@@ -15,13 +15,15 @@ from homeassistant.const import (
     STATE_OPEN,
     STATE_OPENING,
 )
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.discovery import async_load_platform
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     API,
-    COMPONENT,
+    COMPONENT_PLATFORM,
     CONF_INVERT_POSITION,
     DEFAULT_OFFSET,
     DEFAULT_RETRY,
@@ -33,24 +35,24 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Required(CONF_USERNAME): cv.string,
-                vol.Required(CONF_PASSWORD): cv.string,
-                vol.Optional(
+                probatio.Required(CONF_USERNAME): cv.string,
+                probatio.Required(probatio.Secret(CONF_PASSWORD)): cv.string,
+                probatio.Optional(
                     CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
                 ): cv.time_period,
-                vol.Optional(CONF_INVERT_POSITION, default=False): cv.boolean,
+                probatio.Optional(CONF_INVERT_POSITION, default=False): cv.boolean,
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 
-async def async_setup(hass, config):
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Slide platform."""
 
     async def update_slides(now=None):
@@ -166,7 +168,9 @@ async def async_setup(hass, config):
 
     await update_slides()
 
-    hass.async_create_task(async_load_platform(hass, COMPONENT, DOMAIN, {}, config))
+    hass.async_create_task(
+        async_load_platform(hass, COMPONENT_PLATFORM, DOMAIN, {}, config)
+    )
 
     async_track_time_interval(hass, update_slides, scaninterval)
 

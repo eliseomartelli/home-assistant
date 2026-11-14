@@ -1,35 +1,31 @@
 """Tests for the Modern Forms switch platform."""
+
 from unittest.mock import patch
 
 from aiomodernforms import ModernFormsConnectionError
+import pytest
+from pytest_homeassistant.test_util.aiohttp import AiohttpClientMocker
 
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    ATTR_ICON,
-    SERVICE_TURN_OFF,
-    SERVICE_TURN_ON,
-    STATE_OFF,
-    STATE_UNAVAILABLE,
-)
+from homeassistant.components.modern_forms.const import DOMAIN
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SwitchService
+from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE, CommonServiceArgument
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
-from tests.components.modern_forms import init_integration
-from tests.test_util.aiohttp import AiohttpClientMocker
+from . import init_integration, init_integration_gen4
 
 
 async def test_switch_state(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    aioclient_mock: AiohttpClientMocker,
 ) -> None:
     """Test the creation and values of the Modern Forms switches."""
     await init_integration(hass, aioclient_mock)
 
-    entity_registry = er.async_get(hass)
-
     state = hass.states.get("switch.modernformsfan_away_mode")
     assert state
-    assert state.attributes.get(ATTR_ICON) == "mdi:airplane-takeoff"
     assert state.state == STATE_OFF
 
     entry = entity_registry.async_get("switch.modernformsfan_away_mode")
@@ -38,7 +34,6 @@ async def test_switch_state(
 
     state = hass.states.get("switch.modernformsfan_adaptive_learning")
     assert state
-    assert state.attributes.get(ATTR_ICON) == "mdi:school-outline"
     assert state.state == STATE_OFF
 
     entry = entity_registry.async_get("switch.modernformsfan_adaptive_learning")
@@ -56,8 +51,8 @@ async def test_switch_change_state(
     with patch("aiomodernforms.ModernFormsDevice.away") as away_mock:
         await hass.services.async_call(
             SWITCH_DOMAIN,
-            SERVICE_TURN_ON,
-            {ATTR_ENTITY_ID: "switch.modernformsfan_away_mode"},
+            SwitchService.TURN_ON,
+            {CommonServiceArgument.ENTITY_ID: "switch.modernformsfan_away_mode"},
             blocking=True,
         )
         await hass.async_block_till_done()
@@ -66,8 +61,8 @@ async def test_switch_change_state(
     with patch("aiomodernforms.ModernFormsDevice.away") as away_mock:
         await hass.services.async_call(
             SWITCH_DOMAIN,
-            SERVICE_TURN_OFF,
-            {ATTR_ENTITY_ID: "switch.modernformsfan_away_mode"},
+            SwitchService.TURN_OFF,
+            {CommonServiceArgument.ENTITY_ID: "switch.modernformsfan_away_mode"},
             blocking=True,
         )
         await hass.async_block_till_done()
@@ -79,8 +74,10 @@ async def test_switch_change_state(
     ) as adaptive_learning_mock:
         await hass.services.async_call(
             SWITCH_DOMAIN,
-            SERVICE_TURN_ON,
-            {ATTR_ENTITY_ID: "switch.modernformsfan_adaptive_learning"},
+            SwitchService.TURN_ON,
+            {
+                CommonServiceArgument.ENTITY_ID: "switch.modernformsfan_adaptive_learning"
+            },
             blocking=True,
         )
         await hass.async_block_till_done()
@@ -91,8 +88,10 @@ async def test_switch_change_state(
     ) as adaptive_learning_mock:
         await hass.services.async_call(
             SWITCH_DOMAIN,
-            SERVICE_TURN_OFF,
-            {ATTR_ENTITY_ID: "switch.modernformsfan_adaptive_learning"},
+            SwitchService.TURN_OFF,
+            {
+                CommonServiceArgument.ENTITY_ID: "switch.modernformsfan_adaptive_learning"
+            },
             blocking=True,
         )
         await hass.async_block_till_done()
@@ -100,7 +99,8 @@ async def test_switch_change_state(
 
 
 async def test_switch_error(
-    hass: HomeAssistant, aioclient_mock: AiohttpClientMocker, caplog
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
 ) -> None:
     """Test error handling of the Modern Forms switches."""
     await init_integration(hass, aioclient_mock)
@@ -108,18 +108,21 @@ async def test_switch_error(
     aioclient_mock.clear_requests()
     aioclient_mock.post("http://192.168.1.123:80/mf", text="", status=400)
 
-    with patch("homeassistant.components.modern_forms.ModernFormsDevice.update"):
+    with (
+        patch(
+            "homeassistant.components.modern_forms.coordinator.ModernFormsDevice.update"
+        ),
+        pytest.raises(HomeAssistantError) as exc_info,
+    ):
         await hass.services.async_call(
             SWITCH_DOMAIN,
-            SERVICE_TURN_ON,
-            {ATTR_ENTITY_ID: "switch.modernformsfan_away_mode"},
+            SwitchService.TURN_ON,
+            {CommonServiceArgument.ENTITY_ID: "switch.modernformsfan_away_mode"},
             blocking=True,
         )
-        await hass.async_block_till_done()
 
-        state = hass.states.get("switch.modernformsfan_away_mode")
-        assert state.state == STATE_OFF
-        assert "Invalid response from API" in caplog.text
+    assert exc_info.value.translation_domain == DOMAIN
+    assert exc_info.value.translation_key == "invalid_response"
 
 
 async def test_switch_connection_error(
@@ -128,17 +131,36 @@ async def test_switch_connection_error(
     """Test error handling of the Modern Forms switches."""
     await init_integration(hass, aioclient_mock)
 
-    with patch("homeassistant.components.modern_forms.ModernFormsDevice.update"), patch(
-        "homeassistant.components.modern_forms.ModernFormsDevice.away",
-        side_effect=ModernFormsConnectionError,
+    with (
+        patch(
+            "homeassistant.components.modern_forms.coordinator.ModernFormsDevice.update"
+        ),
+        patch(
+            "homeassistant.components.modern_forms.coordinator.ModernFormsDevice.away",
+            side_effect=ModernFormsConnectionError,
+        ),
+        pytest.raises(HomeAssistantError) as exc_info,
     ):
         await hass.services.async_call(
             SWITCH_DOMAIN,
-            SERVICE_TURN_ON,
-            {ATTR_ENTITY_ID: "switch.modernformsfan_away_mode"},
+            SwitchService.TURN_ON,
+            {CommonServiceArgument.ENTITY_ID: "switch.modernformsfan_away_mode"},
             blocking=True,
         )
-        await hass.async_block_till_done()
 
-        state = hass.states.get("switch.modernformsfan_away_mode")
-        assert state.state == STATE_UNAVAILABLE
+    assert exc_info.value.translation_domain == DOMAIN
+    assert exc_info.value.translation_key == "communication_error"
+
+    state = hass.states.get("switch.modernformsfan_away_mode")
+    assert state.state == STATE_UNAVAILABLE
+
+
+async def test_no_adaptive_learning_switch_on_gen4(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+) -> None:
+    """Test the adaptive learning switch isn't created for Gen4 fans."""
+    await init_integration_gen4(hass, aioclient_mock)
+
+    assert hass.states.get("switch.modernformsfan_adaptive_learning") is None
+    assert hass.states.get("switch.modernformsfan_away_mode") is not None

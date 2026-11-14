@@ -1,13 +1,21 @@
 """Amber Electric Constants."""
-import logging
 
-DOMAIN = "amberelectric"
-CONF_API_TOKEN = "api_token"
+import logging
+from typing import Final
+
+from homeassistant.const import Platform
+
+DOMAIN: Final = "amberelectric"
 CONF_SITE_NAME = "site_name"
 CONF_SITE_ID = "site_id"
-CONF_SITE_NMI = "site_nmi"
 
 ATTRIBUTION = "Data provided by Amber Electric"
 
 LOGGER = logging.getLogger(__package__)
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+GENERAL_CHANNEL = "general"
+CONTROLLED_LOAD_CHANNEL = "controlled_load"
+FEED_IN_CHANNEL = "feed_in"
+
+REQUEST_TIMEOUT = 15

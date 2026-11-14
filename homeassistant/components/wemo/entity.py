@@ -1,22 +1,20 @@
 """Classes shared among Wemo entities."""
-from __future__ import annotations
 
-from collections.abc import Generator
-import contextlib
+from collections.abc import Callable
 import logging
+from typing import Any, override
 
 from pywemo.exceptions import ActionException
 
-from homeassistant.core import callback
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .wemo_device import DeviceCoordinator
+from .coordinator import DeviceCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class WemoEntity(CoordinatorEntity):
+class WemoEntity(CoordinatorEntity[DeviceCoordinator]):
     """Common methods for Wemo entities."""
 
     # Most pyWeMo devices are associated with a single Home Assistant entity. When
@@ -30,55 +28,63 @@ class WemoEntity(CoordinatorEntity):
         super().__init__(coordinator)
         self.wemo = coordinator.wemo
         self._device_info = coordinator.device_info
-        self._available = True
 
     @property
-    def name_suffix(self):
+    def name_suffix(self) -> str | None:
         """Suffix to append to the WeMo device name."""
         return self._name_suffix
 
     @property
+    @override
     def name(self) -> str:
         """Return the name of the device if any."""
+        wemo_name: str = self.wemo.name
         if suffix := self.name_suffix:
-            return f"{self.wemo.name} {suffix}"
-        return self.wemo.name
+            return f"{wemo_name} {suffix}"
+        return wemo_name
 
     @property
-    def available(self) -> bool:
-        """Return true if the device is available."""
-        return super().available and self._available
-
-    @property
-    def unique_id_suffix(self):
+    def unique_id_suffix(self) -> str | None:
         """Suffix to append to the WeMo device's unique ID."""
         if self._unique_id_suffix is None and self.name_suffix is not None:
-            return self._name_suffix.lower()
+            return self.name_suffix.lower()
         return self._unique_id_suffix
 
     @property
+    @override
     def unique_id(self) -> str:
         """Return the id of this WeMo device."""
+        serial_number: str = self.wemo.serial_number
         if suffix := self.unique_id_suffix:
-            return f"{self.wemo.serialnumber}_{suffix}"
-        return self.wemo.serialnumber
+            return f"{serial_number}_{suffix}"
+        return serial_number
 
     @property
+    @override
     def device_info(self) -> DeviceInfo:
         """Return the device info."""
         return self._device_info
 
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        self._available = True
-        super()._handle_coordinator_update()
+    async def _async_wemo_call(self, message: str, action: Callable[[], Any]) -> None:
+        """Run a WeMo device action in the executor and update listeners.
 
-    @contextlib.contextmanager
-    def _wemo_exception_handler(self, message: str) -> Generator[None, None, None]:
-        """Wrap device calls to set `_available` when wemo exceptions happen."""
+        Handles errors from the device and ensures all entities sharing the
+        same coordinator are aware of updates to the device state.
+        """
         try:
-            yield
+            await self.hass.async_add_executor_job(action)
         except ActionException as err:
             _LOGGER.warning("Could not %s for %s (%s)", message, self.name, err)
-            self._available = False
+            self.coordinator.last_exception = err
+            self.coordinator.last_update_success = False
+        finally:
+            self.coordinator.async_update_listeners()
+
+
+class WemoBinaryStateEntity(WemoEntity):
+    """Base for devices that return on/off state via device.get_state()."""
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if the state is on."""
+        return self.wemo.get_state() != 0

@@ -1,16 +1,30 @@
 {
   "domain": "nest",
-  "name": "Nest",
-  "config_flow": true,
-  "dependencies": ["ffmpeg", "http"],
-  "documentation": "https://www.home-assistant.io/integrations/nest",
-  "requirements": ["python-nest==4.1.0", "google-nest-sdm==0.3.9"],
+  "name": "Google Nest",
+  "after_dependencies": ["media_source"],
+  "categories": [
+    "climate.thermostats_heating",
+    "security_safety.cameras",
+    "security_safety.doorbells_intercoms"
+  ],
   "codeowners": ["@allenporter"],
-  "quality_scale": "platinum",
+  "config_flow": true,
+  "connectivity": ["cloud"],
+  "dependencies": ["ffmpeg", "http", "application_credentials"],
   "dhcp": [
     {
       "macaddress": "18B430*"
+    },
+    {
+      "macaddress": "641666*"
+    },
+    {
+      "macaddress": "D8EB46*"
     }
   ],
-  "iot_class": "cloud_push"
+  "documentation": "https://www.home-assistant.io/integrations/nest",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "loggers": ["google_nest_sdm"],
+  "requirements": ["google-nest-sdm==9.2.1"]
 }

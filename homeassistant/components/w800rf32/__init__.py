@@ -1,16 +1,19 @@
 """Support for w800rf32 devices."""
+
 import logging
 
+import probatio
 import W800rf32 as w800
-import voluptuous as vol
 
 from homeassistant.const import (
     CONF_DEVICE,
     EVENT_HOMEASSISTANT_START,
     EVENT_HOMEASSISTANT_STOP,
 )
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import dispatcher_send
+from homeassistant.helpers.typing import ConfigType
 
 DATA_W800RF32 = "data_w800rf32"
 DOMAIN = "w800rf32"
@@ -19,12 +22,13 @@ W800RF32_DEVICE = "w800rf32_{}"
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_SCHEMA = vol.Schema(
-    {DOMAIN: vol.Schema({vol.Required(CONF_DEVICE): cv.string})}, extra=vol.ALLOW_EXTRA
+CONFIG_SCHEMA = probatio.Schema(
+    {DOMAIN: probatio.Schema({probatio.Required(CONF_DEVICE): cv.string})},
+    extra=probatio.ALLOW_EXTRA,
 )
 
 
-def setup(hass, config):
+def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the w800rf32 component."""
 
     # Declare the Handle event

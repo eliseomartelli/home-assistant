@@ -1,48 +1,49 @@
 """The tests for SleepIQ sensor platform."""
+
 from unittest.mock import MagicMock
 
-import homeassistant.components.sleepiq.sensor as sleepiq
-from homeassistant.setup import async_setup_component
+import pytest
+from pytest_homeassistant.common import snapshot_platform
+from syrupy.assertion import SnapshotAssertion
 
-from tests.components.sleepiq.test_init import mock_responses
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.const import STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
-CONFIG = {"username": "foo", "password": "bar"}
-
-
-async def test_setup(hass, requests_mock):
-    """Test for successfully setting up the SleepIQ platform."""
-    mock_responses(requests_mock)
-
-    assert await async_setup_component(hass, "sleepiq", {"sleepiq": CONFIG})
-
-    device_mock = MagicMock()
-    sleepiq.setup_platform(hass, CONFIG, device_mock, MagicMock())
-    devices = device_mock.call_args[0][0]
-    assert len(devices) == 2
-
-    left_side = devices[1]
-    left_side.hass = hass
-    assert left_side.name == "SleepNumber ILE Test1 SleepNumber"
-    assert left_side.state == 40
-
-    right_side = devices[0]
-    right_side.hass = hass
-    assert right_side.name == "SleepNumber ILE Test2 SleepNumber"
-    assert right_side.state == 80
+from .conftest import BED_NAME_LOWER, SLEEPER_L_NAME_LOWER, setup_platform
 
 
-async def test_setup_single(hass, requests_mock):
-    """Test for successfully setting up the SleepIQ platform."""
-    mock_responses(requests_mock, single=True)
+async def test_sensors(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    mock_asyncsleepiq,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Test the SleepIQ sleepnumber for a bed with two sides."""
+    entry = await setup_platform(hass, SENSOR_DOMAIN)
 
-    assert await async_setup_component(hass, "sleepiq", {"sleepiq": CONFIG})
+    await snapshot_platform(hass, entity_registry, snapshot, entry.entry_id)
 
-    device_mock = MagicMock()
-    sleepiq.setup_platform(hass, CONFIG, device_mock, MagicMock())
-    devices = device_mock.call_args[0][0]
-    assert len(devices) == 1
 
-    right_side = devices[0]
-    right_side.hass = hass
-    assert right_side.name == "SleepNumber ILE Test1 SleepNumber"
-    assert right_side.state == 40
+@pytest.mark.parametrize(
+    "timezone",
+    [pytest.param(None, id="missing"), pytest.param("Not/AZone", id="invalid")],
+)
+async def test_session_times_without_bed_timezone(
+    hass: HomeAssistant,
+    mock_asyncsleepiq: MagicMock,
+    mock_bed: MagicMock,
+    timezone: str | None,
+) -> None:
+    """Test session times stay unknown when the bed time zone is not usable."""
+    mock_bed.timezone = timezone
+    await setup_platform(hass, SENSOR_DOMAIN)
+
+    assert (
+        hass.states.get(
+            f"sensor.{BED_NAME_LOWER}_sleepnumber_{BED_NAME_LOWER}"
+            f"_{SLEEPER_L_NAME_LOWER}_bedtime"
+        ).state
+        == STATE_UNKNOWN
+    )

@@ -1,79 +1,219 @@
 """Signal Messenger for notify component."""
-import logging
 
+import logging
+from typing import Any, override
+
+import probatio
 from pysignalclirestapi import SignalCliRestApi, SignalCliRestApiError
-import voluptuous as vol
+import requests
 
 from homeassistant.components.notify import (
     ATTR_DATA,
-    PLATFORM_SCHEMA,
+    ATTR_TARGET,
+    PLATFORM_SCHEMA as NOTIFY_PLATFORM_SCHEMA,
     BaseNotificationService,
 )
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SENDER_NR = "number"
 CONF_RECP_NR = "recipients"
 CONF_SIGNAL_CLI_REST_API = "url"
-ATTR_FILENAME = "attachment"
+CONF_MAX_ALLOWED_DOWNLOAD_SIZE_BYTES = 52428800
 ATTR_FILENAMES = "attachments"
+ATTR_URLS = "urls"
+ATTR_VERIFY_SSL = "verify_ssl"
+ATTR_TEXTMODE = "text_mode"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+TEXTMODE_OPTIONS = ["normal", "styled"]
+
+DATA_FILENAMES_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_SENDER_NR): cv.string,
-        vol.Required(CONF_SIGNAL_CLI_REST_API): cv.string,
-        vol.Required(CONF_RECP_NR): vol.All(cv.ensure_list, [cv.string]),
+        probatio.Required(ATTR_FILENAMES): [cv.string],
+        probatio.Optional(ATTR_TEXTMODE, default="normal"): probatio.In(
+            TEXTMODE_OPTIONS
+        ),
+    }
+)
+
+DATA_URLS_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(ATTR_URLS): [cv.url],
+        probatio.Optional(ATTR_VERIFY_SSL, default=True): cv.boolean,
+        probatio.Optional(ATTR_TEXTMODE, default="normal"): probatio.In(
+            TEXTMODE_OPTIONS
+        ),
+    }
+)
+
+DATA_SCHEMA = probatio.Any(
+    None,
+    probatio.Schema(
+        {
+            probatio.Optional(ATTR_TEXTMODE, default="normal"): probatio.In(
+                TEXTMODE_OPTIONS
+            ),
+        }
+    ),
+    DATA_FILENAMES_SCHEMA,
+    DATA_URLS_SCHEMA,
+)
+
+PLATFORM_SCHEMA = NOTIFY_PLATFORM_SCHEMA.extend(
+    {
+        probatio.Required(CONF_SENDER_NR): cv.string,
+        probatio.Required(CONF_SIGNAL_CLI_REST_API): cv.string,
+        probatio.Required(CONF_RECP_NR): probatio.All(
+            probatio.EnsureList(), [cv.string]
+        ),
     }
 )
 
 
-def get_service(hass, config, discovery_info=None):
+def get_service(
+    hass: HomeAssistant,
+    config: ConfigType,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> SignalNotificationService:
     """Get the SignalMessenger notification service."""
 
     sender_nr = config[CONF_SENDER_NR]
     recp_nrs = config[CONF_RECP_NR]
     signal_cli_rest_api_url = config[CONF_SIGNAL_CLI_REST_API]
 
-    signal_cli_rest_api = SignalCliRestApi(signal_cli_rest_api_url, sender_nr)
-
-    return SignalNotificationService(recp_nrs, signal_cli_rest_api)
+    return SignalNotificationService(hass, recp_nrs, signal_cli_rest_api_url, sender_nr)
 
 
 class SignalNotificationService(BaseNotificationService):
     """Implement the notification service for SignalMessenger."""
 
-    def __init__(self, recp_nrs, signal_cli_rest_api):
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        recp_nrs: list[str],
+        signal_cli_rest_api_url: str,
+        sender_nr: str,
+    ) -> None:
         """Initialize the service."""
 
+        self._hass = hass
         self._recp_nrs = recp_nrs
-        self._signal_cli_rest_api = signal_cli_rest_api
+        self._signal_cli_rest_api_url = signal_cli_rest_api_url
+        self._sender_nr = sender_nr
+        self._signal_cli_rest_api: SignalCliRestApi | None = None
 
-    def send_message(self, message="", **kwargs):
-        """Send a message to a one or more recipients.
+    @property
+    def signal_cli_rest_api(self) -> SignalCliRestApi:
+        """Return the REST API client, creating it on first use."""
+        # Creating the client queries the REST API, which may not be up yet
+        # when Home Assistant starts.
+        if self._signal_cli_rest_api is None:
+            self._signal_cli_rest_api = SignalCliRestApi(
+                self._signal_cli_rest_api_url, self._sender_nr
+            )
+        return self._signal_cli_rest_api
 
-        Additionally a file can be attached.
-        """
+    @override
+    def send_message(self, message: str = "", **kwargs: Any) -> None:
+        """Send a message to one or more recipients."""
 
         _LOGGER.debug("Sending signal message")
 
+        recipients: list[str] = kwargs.get(ATTR_TARGET) or self._recp_nrs
+
         data = kwargs.get(ATTR_DATA)
 
-        filenames = None
-        if data is not None:
-            if ATTR_FILENAMES in data:
-                filenames = data[ATTR_FILENAMES]
-            if ATTR_FILENAME in data:
-                _LOGGER.warning(
-                    "The 'attachment' option is deprecated, please replace it with 'attachments'. This option will become invalid in version 0.108"
-                )
-                if filenames is None:
-                    filenames = [data[ATTR_FILENAME]]
-                else:
-                    filenames.append(data[ATTR_FILENAME])
-
         try:
-            self._signal_cli_rest_api.send_message(message, self._recp_nrs, filenames)
+            data = DATA_SCHEMA(data)
+        except probatio.Invalid as ex:
+            _LOGGER.error("Invalid message data: %s", ex)
+            raise
+
+        filenames = self.get_filenames(data)
+        attachments_as_bytes = self.get_attachments_as_bytes(
+            data, CONF_MAX_ALLOWED_DOWNLOAD_SIZE_BYTES, self._hass
+        )
+        try:
+            self.signal_cli_rest_api.send_message(
+                message,
+                recipients,
+                notify_self=True,
+                filenames=filenames,
+                attachments_as_bytes=attachments_as_bytes,
+                text_mode="normal" if data is None else data.get(ATTR_TEXTMODE),
+            )
         except SignalCliRestApiError as ex:
             _LOGGER.error("%s", ex)
-            raise ex
+            raise
+
+    @staticmethod
+    def get_filenames(data: Any) -> list[str] | None:
+        """Extract attachment filenames from data."""
+        try:
+            data = DATA_FILENAMES_SCHEMA(data)
+        except probatio.Invalid:
+            return None
+        return data[ATTR_FILENAMES]
+
+    @staticmethod
+    def get_attachments_as_bytes(
+        data: Any,
+        attachment_size_limit: int,
+        hass: HomeAssistant,
+    ) -> list[bytearray] | None:
+        """Retrieve attachments from URLs defined in data."""
+        try:
+            data = DATA_URLS_SCHEMA(data)
+        except probatio.Invalid:
+            return None
+        urls = data[ATTR_URLS]
+
+        attachments_as_bytes: list[bytearray] = []
+
+        for url in urls:
+            try:
+                if not hass.config.is_allowed_external_url(url):
+                    _LOGGER.error("URL '%s' not in allow list", url)
+                    continue
+
+                resp = requests.get(
+                    url, verify=data[ATTR_VERIFY_SSL], timeout=10, stream=True
+                )
+                resp.raise_for_status()
+
+                if (
+                    resp.headers.get("Content-Length") is not None
+                    and int(str(resp.headers.get("Content-Length")))
+                    > attachment_size_limit
+                ):
+                    content_length = int(str(resp.headers.get("Content-Length")))
+                    raise ValueError(  # noqa: TRY301
+                        "Attachment too large (Content-Length reports "
+                        f"{content_length}). Max size: "
+                        f"{CONF_MAX_ALLOWED_DOWNLOAD_SIZE_BYTES} bytes"
+                    )
+
+                size = 0
+                chunks = bytearray()
+                for chunk in resp.iter_content(1024):
+                    size += len(chunk)
+                    if size > attachment_size_limit:
+                        raise ValueError(  # noqa: TRY301
+                            f"Attachment too large (Stream reports {size}). "
+                            f"Max size: {CONF_MAX_ALLOWED_DOWNLOAD_SIZE_BYTES} bytes"
+                        )
+
+                    chunks.extend(chunk)
+
+                attachments_as_bytes.append(chunks)
+            except Exception as ex:
+                _LOGGER.error("%s", ex)
+                raise
+
+        if not attachments_as_bytes:
+            return None
+
+        return attachments_as_bytes

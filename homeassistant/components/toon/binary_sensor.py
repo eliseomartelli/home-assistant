@@ -1,20 +1,19 @@
 """Support for Toon binary sensors."""
-from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import override
 
 from homeassistant.components.binary_sensor import (
-    DEVICE_CLASS_CONNECTIVITY,
-    DEVICE_CLASS_PROBLEM,
+    BinarySensorDeviceClass,
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import ToonDataUpdateCoordinator
-from .models import (
+from .coordinator import ToonConfigEntry, ToonDataUpdateCoordinator
+from .entity import (
     ToonBoilerDeviceEntity,
     ToonBoilerModuleDeviceEntity,
     ToonDisplayDeviceEntity,
@@ -24,10 +23,12 @@ from .models import (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant,
+    entry: ToonConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up a Toon binary sensor based on a config entry."""
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     entities = [
         description.cls(coordinator, description)
@@ -58,13 +59,15 @@ class ToonBinarySensor(ToonEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
 
+        # Legacy format, kept as migrating existing unique IDs is not worth the risk
         self._attr_unique_id = (
             # This unique ID is a bit ugly and contains unneeded information.
             # It is here for legacy / backward compatible reasons.
-            f"{DOMAIN}_{coordinator.data.agreement.agreement_id}_binary_sensor_{description.key}"
+            f"{DOMAIN}_{coordinator.data.agreement.agreement_id}_binary_sensor_{description.key}"  # pylint: disable=home-assistant-entity-unique-id-redundant-domain,home-assistant-entity-unique-id-redundant-platform
         )
 
     @property
+    @override
     def is_on(self) -> bool | None:
         """Return the status of the binary sensor."""
         section = getattr(self.coordinator.data, self.entity_description.section)
@@ -91,14 +94,14 @@ class ToonBoilerModuleBinarySensor(ToonBinarySensor, ToonBoilerModuleDeviceEntit
     """Defines a Boiler module binary sensor."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class ToonBinarySensorRequiredKeysMixin(ToonRequiredKeysMixin):
     """Mixin for binary sensor required keys."""
 
     cls: type[ToonBinarySensor]
 
 
-@dataclass
+@dataclass(frozen=True)
 class ToonBinarySensorEntityDescription(
     BinarySensorEntityDescription, ToonBinarySensorRequiredKeysMixin
 ):
@@ -113,7 +116,7 @@ BINARY_SENSOR_ENTITIES = (
         name="Boiler Module Connection",
         section="thermostat",
         measurement="boiler_module_connected",
-        device_class=DEVICE_CLASS_CONNECTIVITY,
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_registry_enabled_default=False,
         cls=ToonBoilerModuleBinarySensor,
     ),
@@ -167,7 +170,7 @@ BINARY_SENSOR_ENTITIES_BOILER: tuple[ToonBinarySensorEntityDescription, ...] = (
         name="Boiler Status",
         section="thermostat",
         measurement="error_found",
-        device_class=DEVICE_CLASS_PROBLEM,
+        device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:alert",
         cls=ToonBoilerBinarySensor,
     ),
@@ -176,7 +179,7 @@ BINARY_SENSOR_ENTITIES_BOILER: tuple[ToonBinarySensorEntityDescription, ...] = (
         name="OpenTherm Connection",
         section="thermostat",
         measurement="opentherm_communication_error",
-        device_class=DEVICE_CLASS_PROBLEM,
+        device_class=BinarySensorDeviceClass.PROBLEM,
         icon="mdi:check-network-outline",
         entity_registry_enabled_default=False,
         cls=ToonBoilerBinarySensor,

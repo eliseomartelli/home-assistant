@@ -1,12 +1,23 @@
 """Support for Zabbix sensors."""
+
+from collections.abc import Mapping
 import logging
+from typing import Any, override
 
-import voluptuous as vol
+import probatio
+from zabbix_utils import ZabbixAPI
 
-from homeassistant.components import zabbix
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
+from homeassistant.components.sensor import (
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
+    SensorEntity,
+)
 from homeassistant.const import CONF_NAME
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -14,31 +25,36 @@ _CONF_TRIGGERS = "triggers"
 _CONF_HOSTIDS = "hostids"
 _CONF_INDIVIDUAL = "individual"
 
-_ZABBIX_ID_LIST_SCHEMA = vol.Schema([int])
-_ZABBIX_TRIGGER_SCHEMA = vol.Schema(
+_ZABBIX_ID_LIST_SCHEMA = probatio.Schema([int])
+_ZABBIX_TRIGGER_SCHEMA = probatio.Schema(
     {
-        vol.Optional(_CONF_HOSTIDS, default=[]): _ZABBIX_ID_LIST_SCHEMA,
-        vol.Optional(_CONF_INDIVIDUAL, default=False): cv.boolean,
-        vol.Optional(CONF_NAME): cv.string,
+        probatio.Optional(_CONF_HOSTIDS, default=[]): _ZABBIX_ID_LIST_SCHEMA,
+        probatio.Optional(_CONF_INDIVIDUAL, default=False): cv.boolean,
+        probatio.Optional(CONF_NAME): cv.string,
     }
 )
 
 # SCAN_INTERVAL = 30
 #
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {vol.Required(_CONF_TRIGGERS): vol.Any(_ZABBIX_TRIGGER_SCHEMA, None)}
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
+    {probatio.Required(_CONF_TRIGGERS): probatio.Any(_ZABBIX_TRIGGER_SCHEMA, None)}
 )
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+def setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up the Zabbix sensor platform."""
-    sensors = []
+    sensors: list[ZabbixTriggerCountSensor] = []
 
-    if not (zapi := hass.data[zabbix.DOMAIN]):
+    if not (zapi := hass.data[DOMAIN]):
         _LOGGER.error("Zabbix integration hasn't been loaded? zapi is None")
-        return False
+        return
 
-    _LOGGER.info("Connected to Zabbix API Version %s", zapi.api_version())
+    _LOGGER.debug("Connected to Zabbix API Version %s", zapi.api_version())
 
     # The following code seems overly complex. Need to think about this...
     if trigger_conf := config.get(_CONF_TRIGGERS):
@@ -51,27 +67,24 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
             if not hostids:
                 # We need hostids
                 _LOGGER.error("If using 'individual', must specify hostids")
-                return False
+                return
 
             for hostid in hostids:
                 _LOGGER.debug("Creating Zabbix Sensor: %s", str(hostid))
-                sensor = ZabbixSingleHostTriggerCountSensor(zapi, [hostid], name)
-                sensors.append(sensor)
+                sensors.append(ZabbixSingleHostTriggerCountSensor(zapi, [hostid], name))
+        elif not hostids:
+            # Single sensor that provides the total count of triggers.
+            _LOGGER.debug("Creating Zabbix Sensor")
+            sensors.append(ZabbixTriggerCountSensor(zapi, name))
         else:
-            if not hostids:
-                # Single sensor that provides the total count of triggers.
-                _LOGGER.debug("Creating Zabbix Sensor")
-                sensor = ZabbixTriggerCountSensor(zapi, name)
-            else:
-                # Single sensor that sums total issues for all hosts
-                _LOGGER.debug("Creating Zabbix Sensor group: %s", str(hostids))
-                sensor = ZabbixMultipleHostTriggerCountSensor(zapi, hostids, name)
-            sensors.append(sensor)
+            # Single sensor that sums total issues for all hosts
+            _LOGGER.debug("Creating Zabbix Sensor group: %s", str(hostids))
+            sensors.append(ZabbixMultipleHostTriggerCountSensor(zapi, hostids, name))
+
     else:
         # Single sensor that provides the total count of triggers.
         _LOGGER.debug("Creating Zabbix Sensor")
-        sensor = ZabbixTriggerCountSensor(zapi)
-        sensors.append(sensor)
+        sensors.append(ZabbixTriggerCountSensor(zapi))
 
     add_entities(sensors)
 
@@ -79,25 +92,28 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
 class ZabbixTriggerCountSensor(SensorEntity):
     """Get the active trigger count for all Zabbix monitored hosts."""
 
-    def __init__(self, zApi, name="Zabbix"):
+    def __init__(self, zapi: ZabbixAPI, name: str | None = "Zabbix") -> None:
         """Initialize Zabbix sensor."""
         self._name = name
-        self._zapi = zApi
-        self._state = None
-        self._attributes = {}
+        self._zapi = zapi
+        self._state: int | None = None
+        self._attributes: dict[str, Any] = {}
 
     @property
-    def name(self):
+    @override
+    def name(self) -> str | None:
         """Return the name of the sensor."""
         return self._name
 
     @property
-    def native_value(self):
+    @override
+    def native_value(self) -> StateType:
         """Return the state of the sensor."""
         return self._state
 
     @property
-    def native_unit_of_measurement(self):
+    @override
+    def native_unit_of_measurement(self) -> str:
         """Return the units of measurement."""
         return "issues"
 
@@ -106,14 +122,15 @@ class ZabbixTriggerCountSensor(SensorEntity):
             output="extend", only_true=1, monitored=1, filter={"value": 1}
         )
 
-    def update(self):
+    def update(self) -> None:
         """Update the sensor."""
         _LOGGER.debug("Updating ZabbixTriggerCountSensor: %s", str(self._name))
         triggers = self._call_zabbix_api()
         self._state = len(triggers)
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> Mapping[str, Any] | None:
         """Return the state attributes of the device."""
         return self._attributes
 
@@ -121,9 +138,11 @@ class ZabbixTriggerCountSensor(SensorEntity):
 class ZabbixSingleHostTriggerCountSensor(ZabbixTriggerCountSensor):
     """Get the active trigger count for a single Zabbix monitored host."""
 
-    def __init__(self, zApi, hostid, name=None):
+    def __init__(
+        self, zapi: ZabbixAPI, hostid: list[str], name: str | None = None
+    ) -> None:
         """Initialize Zabbix sensor."""
-        super().__init__(zApi, name)
+        super().__init__(zapi, name)
         self._hostid = hostid
         if not name:
             self._name = self._zapi.host.get(hostids=self._hostid, output="extend")[0][
@@ -132,6 +151,7 @@ class ZabbixSingleHostTriggerCountSensor(ZabbixTriggerCountSensor):
 
         self._attributes["Host ID"] = self._hostid
 
+    @override
     def _call_zabbix_api(self):
         return self._zapi.trigger.get(
             hostids=self._hostid,
@@ -145,15 +165,18 @@ class ZabbixSingleHostTriggerCountSensor(ZabbixTriggerCountSensor):
 class ZabbixMultipleHostTriggerCountSensor(ZabbixTriggerCountSensor):
     """Get the active trigger count for specified Zabbix monitored hosts."""
 
-    def __init__(self, zApi, hostids, name=None):
+    def __init__(
+        self, zapi: ZabbixAPI, hostids: list[str], name: str | None = None
+    ) -> None:
         """Initialize Zabbix sensor."""
-        super().__init__(zApi, name)
+        super().__init__(zapi, name)
         self._hostids = hostids
         if not name:
             host_names = self._zapi.host.get(hostids=self._hostids, output="extend")
             self._name = " ".join(name["name"] for name in host_names)
         self._attributes["Host IDs"] = self._hostids
 
+    @override
     def _call_zabbix_api(self):
         return self._zapi.trigger.get(
             hostids=self._hostids,

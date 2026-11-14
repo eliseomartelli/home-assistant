@@ -1,14 +1,13 @@
 """Support for Repetier-Server sensors."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
 
-import pyrepetier
-import voluptuous as vol
+import probatio
+import pyrepetierng as pyrepetier
 
-from homeassistant.components.sensor import SensorEntityDescription
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntityDescription
 from homeassistant.const import (
     CONF_API_KEY,
     CONF_HOST,
@@ -16,14 +15,15 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PORT,
     CONF_SENSORS,
-    DEVICE_CLASS_TEMPERATURE,
     PERCENTAGE,
-    TEMP_CELSIUS,
+    UnitOfTemperature,
 )
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.discovery import load_platform
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import track_time_interval
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import slugify as util_slugify
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,18 +119,19 @@ API_PRINTER_METHODS: dict[str, APIMethods] = {
 def has_all_unique_names(value):
     """Validate that printers have an unique name."""
     names = [util_slugify(printer[CONF_NAME]) for printer in value]
-    vol.Schema(vol.Unique())(names)
+    probatio.Schema(probatio.Unique())(names)
     return value
 
 
-@dataclass
+@dataclass(frozen=True)
 class RepetierRequiredKeysMixin:
     """Mixin for required keys."""
 
     type: str
 
 
-@dataclass
+@dataclass(frozen=True)
+# pylint: disable-next=home-assistant-enforce-class-module
 class RepetierSensorEntityDescription(
     SensorEntityDescription, RepetierRequiredKeysMixin
 ):
@@ -141,23 +142,23 @@ SENSOR_TYPES: dict[str, RepetierSensorEntityDescription] = {
     "bed_temperature": RepetierSensorEntityDescription(
         key="bed_temperature",
         type="temperature",
-        native_unit_of_measurement=TEMP_CELSIUS,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         name="_bed_",
-        device_class=DEVICE_CLASS_TEMPERATURE,
+        device_class=SensorDeviceClass.TEMPERATURE,
     ),
     "extruder_temperature": RepetierSensorEntityDescription(
         key="extruder_temperature",
         type="temperature",
-        native_unit_of_measurement=TEMP_CELSIUS,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         name="_extruder_",
-        device_class=DEVICE_CLASS_TEMPERATURE,
+        device_class=SensorDeviceClass.TEMPERATURE,
     ),
     "chamber_temperature": RepetierSensorEntityDescription(
         key="chamber_temperature",
         type="temperature",
-        native_unit_of_measurement=TEMP_CELSIUS,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         name="_chamber_",
-        device_class=DEVICE_CLASS_TEMPERATURE,
+        device_class=SensorDeviceClass.TEMPERATURE,
     ),
     "current_state": RepetierSensorEntityDescription(
         key="current_state",
@@ -185,38 +186,38 @@ SENSOR_TYPES: dict[str, RepetierSensorEntityDescription] = {
     ),
 }
 
-SENSOR_SCHEMA = vol.Schema(
+SENSOR_SCHEMA = probatio.Schema(
     {
-        vol.Optional(CONF_MONITORED_CONDITIONS, default=list(SENSOR_TYPES)): vol.All(
-            cv.ensure_list, [vol.In(SENSOR_TYPES)]
-        ),
-        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+        probatio.Optional(
+            CONF_MONITORED_CONDITIONS, default=list(SENSOR_TYPES)
+        ): probatio.All(probatio.EnsureList(), [probatio.In(SENSOR_TYPES)]),
+        probatio.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     }
 )
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.All(
-            cv.ensure_list,
+        DOMAIN: probatio.All(
+            probatio.EnsureList(),
             [
-                vol.Schema(
+                probatio.Schema(
                     {
-                        vol.Required(CONF_API_KEY): cv.string,
-                        vol.Required(CONF_HOST): cv.string,
-                        vol.Optional(CONF_PORT, default=3344): cv.port,
-                        vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-                        vol.Optional(CONF_SENSORS, default={}): SENSOR_SCHEMA,
+                        probatio.Required(probatio.Secret(CONF_API_KEY)): cv.string,
+                        probatio.Required(CONF_HOST): cv.string,
+                        probatio.Optional(CONF_PORT, default=3344): probatio.Port(),
+                        probatio.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
+                        probatio.Optional(CONF_SENSORS, default={}): SENSOR_SCHEMA,
                     }
                 )
             ],
             has_all_unique_names,
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 
-def setup(hass, config):
+def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Repetier Server component."""
     hass.data[REPETIER_API] = {}
 
@@ -314,4 +315,6 @@ class PrinterAPI:
 
         if not sensor_info:
             return
-        load_platform(self._hass, "sensor", DOMAIN, sensor_info, self.config)
+        load_platform(
+            self._hass, "sensor", DOMAIN, {"sensors": sensor_info}, self.config
+        )

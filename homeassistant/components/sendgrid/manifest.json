@@ -1,8 +1,12 @@
 {
   "domain": "sendgrid",
   "name": "SendGrid",
-  "documentation": "https://www.home-assistant.io/integrations/sendgrid",
-  "requirements": ["sendgrid==6.8.2"],
+  "categories": ["messaging_notifications.email_sms_calls"],
   "codeowners": [],
-  "iot_class": "cloud_push"
+  "connectivity": ["cloud"],
+  "documentation": "https://www.home-assistant.io/integrations/sendgrid",
+  "iot_class": "cloud_push",
+  "loggers": ["sendgrid"],
+  "quality_scale": "legacy",
+  "requirements": ["sendgrid==6.8.2"]
 }

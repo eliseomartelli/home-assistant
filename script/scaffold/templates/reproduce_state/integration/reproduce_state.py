@@ -1,9 +1,9 @@
 """Reproduce an NEW_NAME state."""
-from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 import logging
-from typing import Any, Iterable
+from typing import Any
 
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -89,4 +89,7 @@ async def async_reproduce_states(
 
     # Alternative: Reproduce states in sequence
     # for state in states:
-    #     await _async_reproduce_state(hass, state, context=context, reproduce_options=reproduce_options)
+    #     await _async_reproduce_state(
+    #         hass, state, context=context,
+    #         reproduce_options=reproduce_options,
+    #     )

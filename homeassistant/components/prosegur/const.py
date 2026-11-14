@@ -2,4 +2,4 @@
 
 DOMAIN = "prosegur"
 
-CONF_COUNTRY = "country"
+CONF_CONTRACT = "contract"

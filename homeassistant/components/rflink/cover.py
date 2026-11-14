@@ -1,14 +1,19 @@
 """Support for Rflink Cover devices."""
+
 import logging
+from typing import Any, override
 
-import voluptuous as vol
+import probatio
 
-from homeassistant.components.cover import PLATFORM_SCHEMA, CoverEntity
-from homeassistant.const import CONF_DEVICES, CONF_NAME, CONF_TYPE, STATE_OPEN
-import homeassistant.helpers.config_validation as cv
+from homeassistant.components.cover import CoverEntity, CoverState
+from homeassistant.const import CONF_DEVICES, CONF_NAME, CONF_TYPE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from . import (
+from .const import (
     CONF_ALIASES,
     CONF_DEVICE_DEFAULTS,
     CONF_FIRE_EVENT,
@@ -17,8 +22,8 @@ from . import (
     CONF_NOGROUP_ALIASES,
     CONF_SIGNAL_REPETITIONS,
     DEVICE_DEFAULTS_SCHEMA,
-    RflinkCommand,
 )
+from .entity import RflinkCommand
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,33 +32,33 @@ PARALLEL_UPDATES = 0
 TYPE_STANDARD = "standard"
 TYPE_INVERTED = "inverted"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Optional(
-            CONF_DEVICE_DEFAULTS, default=DEVICE_DEFAULTS_SCHEMA({})
-        ): DEVICE_DEFAULTS_SCHEMA,
-        vol.Optional(CONF_DEVICES, default={}): vol.Schema(
-            {
-                cv.string: {
-                    vol.Optional(CONF_NAME): cv.string,
-                    vol.Optional(CONF_TYPE): vol.Any(TYPE_STANDARD, TYPE_INVERTED),
-                    vol.Optional(CONF_ALIASES, default=[]): vol.All(
-                        cv.ensure_list, [cv.string]
-                    ),
-                    vol.Optional(CONF_GROUP_ALIASES, default=[]): vol.All(
-                        cv.ensure_list, [cv.string]
-                    ),
-                    vol.Optional(CONF_NOGROUP_ALIASES, default=[]): vol.All(
-                        cv.ensure_list, [cv.string]
-                    ),
-                    vol.Optional(CONF_FIRE_EVENT, default=False): cv.boolean,
-                    vol.Optional(CONF_SIGNAL_REPETITIONS): vol.Coerce(int),
-                    vol.Optional(CONF_GROUP, default=True): cv.boolean,
-                }
+RFLINK_PLATFORM = {
+    probatio.Optional(
+        CONF_DEVICE_DEFAULTS, default=DEVICE_DEFAULTS_SCHEMA({})
+    ): DEVICE_DEFAULTS_SCHEMA,
+    probatio.Optional(CONF_DEVICES, default={}): probatio.Schema(
+        {
+            cv.string: {
+                probatio.Optional(CONF_NAME): cv.string,
+                probatio.Optional(CONF_TYPE): probatio.Any(
+                    TYPE_STANDARD, TYPE_INVERTED
+                ),
+                probatio.Optional(CONF_ALIASES, default=[]): probatio.All(
+                    probatio.EnsureList(), [cv.string]
+                ),
+                probatio.Optional(CONF_GROUP_ALIASES, default=[]): probatio.All(
+                    probatio.EnsureList(), [cv.string]
+                ),
+                probatio.Optional(CONF_NOGROUP_ALIASES, default=[]): probatio.All(
+                    probatio.EnsureList(), [cv.string]
+                ),
+                probatio.Optional(CONF_FIRE_EVENT, default=False): cv.boolean,
+                probatio.Optional(CONF_SIGNAL_REPETITIONS): probatio.Coerce(int),
+                probatio.Optional(CONF_GROUP, default=True): cv.boolean,
             }
-        ),
-    }
-)
+        }
+    ),
+}
 
 
 def entity_type_for_device_id(device_id):
@@ -106,20 +111,29 @@ def devices_from_config(domain_config):
     return devices
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up the Rflink cover platform."""
-    async_add_entities(devices_from_config(config))
+    if discovery_info is None:
+        return
+    async_add_entities(devices_from_config(discovery_info))
 
 
 class RflinkCover(RflinkCommand, CoverEntity, RestoreEntity):
     """Rflink entity which can switch on/stop/off (eg: cover)."""
 
-    async def async_added_to_hass(self):
+    @override
+    async def async_added_to_hass(self) -> None:
         """Restore RFLink cover state (OPEN/CLOSE)."""
         await super().async_added_to_hass()
         if (old_state := await self.async_get_last_state()) is not None:
-            self._state = old_state.state == STATE_OPEN
+            self._state = old_state.state == CoverState.OPEN
 
+    @override
     def _handle_event(self, event):
         """Adjust state if Rflink picks up a remote command for this device."""
         self.cancel_queued_send_commands()
@@ -131,29 +145,29 @@ class RflinkCover(RflinkCommand, CoverEntity, RestoreEntity):
             self._state = False
 
     @property
-    def should_poll(self):
-        """No polling available in RFlink cover."""
-        return False
-
-    @property
-    def is_closed(self):
+    @override
+    def is_closed(self) -> bool | None:
         """Return if the cover is closed."""
         return not self._state
 
     @property
-    def assumed_state(self):
+    @override
+    def assumed_state(self) -> bool:
         """Return True because covers can be stopped midway."""
         return True
 
-    async def async_close_cover(self, **kwargs):
+    @override
+    async def async_close_cover(self, **kwargs: Any) -> None:
         """Turn the device close."""
         await self._async_handle_command("close_cover")
 
-    async def async_open_cover(self, **kwargs):
+    @override
+    async def async_open_cover(self, **kwargs: Any) -> None:
         """Turn the device open."""
         await self._async_handle_command("open_cover")
 
-    async def async_stop_cover(self, **kwargs):
+    @override
+    async def async_stop_cover(self, **kwargs: Any) -> None:
         """Turn the device stop."""
         await self._async_handle_command("stop_cover")
 
@@ -161,6 +175,7 @@ class RflinkCover(RflinkCommand, CoverEntity, RestoreEntity):
 class InvertedRflinkCover(RflinkCover):
     """Rflink cover that has inverted open/close commands."""
 
+    @override
     async def _async_send_command(self, cmd, repetitions):
         """Will invert only the UP/DOWN commands."""
         _LOGGER.debug("Getting command: %s for Rflink device: %s", cmd, self._device_id)

@@ -1,7 +1,13 @@
 """Support for Kaiterra Air Quality Sensors."""
+
+from typing import Any, override
+
 from homeassistant.components.air_quality import AirQualityEntity
 from homeassistant.const import CONF_DEVICE_ID, CONF_NAME
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import (
     ATTR_AQI_LEVEL,
@@ -12,7 +18,12 @@ from .const import (
 )
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up the air_quality kaiterra sensor."""
     if discovery_info is None:
         return
@@ -26,6 +37,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
 class KaiterraAirQuality(AirQualityEntity):
     """Implementation of a Kaittera air quality sensor."""
+
+    _attr_should_poll = False
 
     def __init__(self, api, name, device_id):
         """Initialize the sensor."""
@@ -41,21 +54,19 @@ class KaiterraAirQuality(AirQualityEntity):
         return self._api.data.get(self._device_id, {})
 
     @property
-    def should_poll(self):
-        """Return that the sensor should not be polled."""
-        return False
-
-    @property
+    @override
     def available(self):
         """Return the availability of the sensor."""
         return self._api.data.get(self._device_id) is not None
 
     @property
+    @override
     def name(self):
         """Return the name of the sensor."""
         return self._name
 
     @property
+    @override
     def air_quality_index(self):
         """Return the Air Quality Index (AQI)."""
         return self._data("aqi")
@@ -71,16 +82,19 @@ class KaiterraAirQuality(AirQualityEntity):
         return self._data("aqi_pollutant")
 
     @property
+    @override
     def particulate_matter_2_5(self):
         """Return the particulate matter 2.5 level."""
         return self._data("rpm25c")
 
     @property
+    @override
     def particulate_matter_10(self):
         """Return the particulate matter 10 level."""
         return self._data("rpm10c")
 
     @property
+    @override
     def carbon_dioxide(self):
         """Return the CO2 (carbon dioxide) level."""
         return self._data("rco2")
@@ -91,26 +105,27 @@ class KaiterraAirQuality(AirQualityEntity):
         return self._data("rtvoc")
 
     @property
+    @override
     def unique_id(self):
         """Return the sensor's unique id."""
-        return f"{self._device_id}_air_quality"
+        # Legacy format, kept as migrating existing unique IDs is not worth the risk
+        return f"{self._device_id}_air_quality"  # pylint: disable=home-assistant-entity-unique-id-redundant-platform
 
     @property
-    def extra_state_attributes(self):
+    @override
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Return the device state attributes."""
-        data = {}
-        attributes = [
-            (ATTR_VOC, self.volatile_organic_compounds),
-            (ATTR_AQI_LEVEL, self.air_quality_index_level),
-            (ATTR_AQI_POLLUTANT, self.air_quality_index_pollutant),
-        ]
+        return {
+            attr: value
+            for attr, value in (
+                (ATTR_VOC, self.volatile_organic_compounds),
+                (ATTR_AQI_LEVEL, self.air_quality_index_level),
+                (ATTR_AQI_POLLUTANT, self.air_quality_index_pollutant),
+            )
+            if value is not None
+        }
 
-        for attr, value in attributes:
-            if value is not None:
-                data[attr] = value
-
-        return data
-
+    @override
     async def async_added_to_hass(self):
         """Register callback."""
         self.async_on_remove(

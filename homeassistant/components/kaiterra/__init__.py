@@ -1,5 +1,6 @@
 """Support for Kaiterra devices."""
-import voluptuous as vol
+
+import probatio
 
 from homeassistant.const import (
     CONF_API_KEY,
@@ -9,10 +10,12 @@ from homeassistant.const import (
     CONF_SCAN_INTERVAL,
     CONF_TYPE,
 )
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.discovery import async_load_platform
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
 
 from .api_data import KaiterraApiData
 from .const import (
@@ -28,32 +31,36 @@ from .const import (
     PLATFORMS,
 )
 
-KAITERRA_DEVICE_SCHEMA = vol.Schema(
+KAITERRA_DEVICE_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_DEVICE_ID): cv.string,
-        vol.Required(CONF_TYPE): vol.In(AVAILABLE_DEVICE_TYPES),
-        vol.Optional(CONF_NAME): cv.string,
+        probatio.Required(CONF_DEVICE_ID): cv.string,
+        probatio.Required(CONF_TYPE): probatio.In(AVAILABLE_DEVICE_TYPES),
+        probatio.Optional(CONF_NAME): cv.string,
     }
 )
 
-KAITERRA_SCHEMA = vol.Schema(
+KAITERRA_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_API_KEY): cv.string,
-        vol.Required(CONF_DEVICES): vol.All(cv.ensure_list, [KAITERRA_DEVICE_SCHEMA]),
-        vol.Optional(CONF_AQI_STANDARD, default=DEFAULT_AQI_STANDARD): vol.In(
+        probatio.Required(probatio.Secret(CONF_API_KEY)): cv.string,
+        probatio.Required(CONF_DEVICES): probatio.All(
+            probatio.EnsureList(), [KAITERRA_DEVICE_SCHEMA]
+        ),
+        probatio.Optional(CONF_AQI_STANDARD, default=DEFAULT_AQI_STANDARD): probatio.In(
             AVAILABLE_AQI_STANDARDS
         ),
-        vol.Optional(CONF_PREFERRED_UNITS, default=DEFAULT_PREFERRED_UNIT): vol.All(
-            cv.ensure_list, [vol.In(AVAILABLE_UNITS)]
-        ),
-        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.time_period,
+        probatio.Optional(
+            CONF_PREFERRED_UNITS, default=DEFAULT_PREFERRED_UNIT
+        ): probatio.All(probatio.EnsureList(), [probatio.In(AVAILABLE_UNITS)]),
+        probatio.Optional(
+            CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
+        ): cv.time_period,
     }
 )
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: KAITERRA_SCHEMA}, extra=vol.ALLOW_EXTRA)
+CONFIG_SCHEMA = probatio.Schema({DOMAIN: KAITERRA_SCHEMA}, extra=probatio.ALLOW_EXTRA)
 
 
-async def async_setup(hass, config):
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Kaiterra integration."""
 
     conf = config[DOMAIN]

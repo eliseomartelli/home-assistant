@@ -1,124 +1,128 @@
 """Support for monitoring a GreenEye Monitor energy monitor."""
-from __future__ import annotations
 
 import logging
 
 import greeneye
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import (
     CONF_NAME,
     CONF_PORT,
-    CONF_SENSOR_TYPE,
     CONF_SENSORS,
     CONF_TEMPERATURE_UNIT,
     EVENT_HOMEASSISTANT_STOP,
-    TIME_HOURS,
-    TIME_MINUTES,
-    TIME_SECONDS,
+    Platform,
+    UnitOfTime,
 )
 from homeassistant.core import Event, HomeAssistant
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.discovery import async_load_platform
 from homeassistant.helpers.typing import ConfigType
 
+from .const import (
+    CONF_CHANNELS,
+    CONF_COUNTED_QUANTITY,
+    CONF_COUNTED_QUANTITY_PER_PULSE,
+    CONF_MONITORS,
+    CONF_NET_METERING,
+    CONF_NUMBER,
+    CONF_PULSE_COUNTERS,
+    CONF_SERIAL_NUMBER,
+    CONF_TEMPERATURE_SENSORS,
+    CONF_TIME_UNIT,
+    CONF_VOLTAGE_SENSORS,
+    DATA_GREENEYE_MONITOR,
+    DOMAIN,
+    TEMPERATURE_UNIT_CELSIUS,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
-CONF_CHANNELS = "channels"
-CONF_COUNTED_QUANTITY = "counted_quantity"
-CONF_COUNTED_QUANTITY_PER_PULSE = "counted_quantity_per_pulse"
-CONF_MONITOR_SERIAL_NUMBER = "monitor"
-CONF_MONITORS = "monitors"
-CONF_NET_METERING = "net_metering"
-CONF_NUMBER = "number"
-CONF_PULSE_COUNTERS = "pulse_counters"
-CONF_SERIAL_NUMBER = "serial_number"
-CONF_TEMPERATURE_SENSORS = "temperature_sensors"
-CONF_TIME_UNIT = "time_unit"
-CONF_VOLTAGE_SENSORS = "voltage"
-
-DATA_GREENEYE_MONITOR = "greeneye_monitor"
-DOMAIN = "greeneye_monitor"
-
-SENSOR_TYPE_CURRENT = "current_sensor"
-SENSOR_TYPE_PULSE_COUNTER = "pulse_counter"
-SENSOR_TYPE_TEMPERATURE = "temperature_sensor"
-SENSOR_TYPE_VOLTAGE = "voltage_sensor"
-
-TEMPERATURE_UNIT_CELSIUS = "C"
-
-TEMPERATURE_SENSOR_SCHEMA = vol.Schema(
-    {vol.Required(CONF_NUMBER): vol.Range(1, 8), vol.Required(CONF_NAME): cv.string}
+TEMPERATURE_SENSOR_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(CONF_NUMBER): probatio.Range(1, 8),
+        probatio.Required(CONF_NAME): cv.string,
+    }
 )
 
-TEMPERATURE_SENSORS_SCHEMA = vol.Schema(
+TEMPERATURE_SENSORS_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_TEMPERATURE_UNIT): cv.temperature_unit,
-        vol.Required(CONF_SENSORS): vol.All(
-            cv.ensure_list, [TEMPERATURE_SENSOR_SCHEMA]
+        probatio.Required(CONF_TEMPERATURE_UNIT): cv.temperature_unit,
+        probatio.Required(CONF_SENSORS): probatio.All(
+            probatio.EnsureList(), [TEMPERATURE_SENSOR_SCHEMA]
         ),
     }
 )
 
-VOLTAGE_SENSOR_SCHEMA = vol.Schema(
-    {vol.Required(CONF_NUMBER): vol.Range(1, 48), vol.Required(CONF_NAME): cv.string}
+VOLTAGE_SENSOR_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(CONF_NUMBER): probatio.Range(1, 48),
+        probatio.Required(CONF_NAME): cv.string,
+    }
 )
 
-VOLTAGE_SENSORS_SCHEMA = vol.All(cv.ensure_list, [VOLTAGE_SENSOR_SCHEMA])
+VOLTAGE_SENSORS_SCHEMA = probatio.All(probatio.EnsureList(), [VOLTAGE_SENSOR_SCHEMA])
 
-PULSE_COUNTER_SCHEMA = vol.Schema(
+PULSE_COUNTER_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_NUMBER): vol.Range(1, 4),
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_COUNTED_QUANTITY): cv.string,
-        vol.Optional(CONF_COUNTED_QUANTITY_PER_PULSE, default=1.0): vol.Coerce(float),
-        vol.Optional(CONF_TIME_UNIT, default=TIME_SECONDS): vol.Any(
-            TIME_SECONDS, TIME_MINUTES, TIME_HOURS
+        probatio.Required(CONF_NUMBER): probatio.Range(1, 4),
+        probatio.Required(CONF_NAME): cv.string,
+        probatio.Required(CONF_COUNTED_QUANTITY): cv.string,
+        probatio.Optional(
+            CONF_COUNTED_QUANTITY_PER_PULSE, default=1.0
+        ): probatio.Coerce(float),
+        probatio.Optional(CONF_TIME_UNIT, default=UnitOfTime.SECONDS): probatio.Any(
+            UnitOfTime.SECONDS.value, UnitOfTime.MINUTES.value, UnitOfTime.HOURS.value
         ),
     }
 )
 
-PULSE_COUNTERS_SCHEMA = vol.All(cv.ensure_list, [PULSE_COUNTER_SCHEMA])
+PULSE_COUNTERS_SCHEMA = probatio.All(probatio.EnsureList(), [PULSE_COUNTER_SCHEMA])
 
-CHANNEL_SCHEMA = vol.Schema(
+CHANNEL_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_NUMBER): vol.Range(1, 48),
-        vol.Required(CONF_NAME): cv.string,
-        vol.Optional(CONF_NET_METERING, default=False): cv.boolean,
+        probatio.Required(CONF_NUMBER): probatio.Range(1, 48),
+        probatio.Required(CONF_NAME): cv.string,
+        probatio.Optional(CONF_NET_METERING, default=False): cv.boolean,
     }
 )
 
-CHANNELS_SCHEMA = vol.All(cv.ensure_list, [CHANNEL_SCHEMA])
+CHANNELS_SCHEMA = probatio.All(probatio.EnsureList(), [CHANNEL_SCHEMA])
 
-MONITOR_SCHEMA = vol.Schema(
+MONITOR_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_SERIAL_NUMBER): vol.All(
+        probatio.Required(CONF_SERIAL_NUMBER): probatio.All(
             cv.string,
-            vol.Length(
+            probatio.Length(
                 min=8,
                 max=8,
-                msg="GEM serial number must be specified as an 8-character "
-                "string (including leading zeroes).",
+                msg=(
+                    "GEM serial number must be specified as an 8-character "
+                    "string (including leading zeroes)."
+                ),
             ),
-            vol.Coerce(int),
+            probatio.Coerce(int),
         ),
-        vol.Optional(CONF_CHANNELS, default=[]): CHANNELS_SCHEMA,
-        vol.Optional(
+        probatio.Optional(CONF_CHANNELS, default=[]): CHANNELS_SCHEMA,
+        probatio.Optional(
             CONF_TEMPERATURE_SENSORS,
             default={CONF_TEMPERATURE_UNIT: TEMPERATURE_UNIT_CELSIUS, CONF_SENSORS: []},
         ): TEMPERATURE_SENSORS_SCHEMA,
-        vol.Optional(CONF_PULSE_COUNTERS, default=[]): PULSE_COUNTERS_SCHEMA,
-        vol.Optional(CONF_VOLTAGE_SENSORS, default=[]): VOLTAGE_SENSORS_SCHEMA,
+        probatio.Optional(CONF_PULSE_COUNTERS, default=[]): PULSE_COUNTERS_SCHEMA,
+        probatio.Optional(CONF_VOLTAGE_SENSORS, default=[]): VOLTAGE_SENSORS_SCHEMA,
     }
 )
 
-MONITORS_SCHEMA = vol.All(cv.ensure_list, [MONITOR_SCHEMA])
+MONITORS_SCHEMA = probatio.All(probatio.EnsureList(), [MONITOR_SCHEMA])
 
-COMPONENT_SCHEMA = vol.Schema(
-    {vol.Required(CONF_PORT): cv.port, vol.Required(CONF_MONITORS): MONITORS_SCHEMA}
+COMPONENT_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(CONF_PORT): probatio.Port(),
+        probatio.Required(CONF_MONITORS): MONITORS_SCHEMA,
+    }
 )
 
-CONFIG_SCHEMA = vol.Schema({DOMAIN: COMPONENT_SCHEMA}, extra=vol.ALLOW_EXTRA)
+CONFIG_SCHEMA = probatio.Schema({DOMAIN: COMPONENT_SCHEMA}, extra=probatio.ALLOW_EXTRA)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -127,65 +131,22 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data[DATA_GREENEYE_MONITOR] = monitors
 
     server_config = config[DOMAIN]
-    server = await monitors.start_server(server_config[CONF_PORT])
+    await monitors.start_server(server_config[CONF_PORT])
 
-    async def close_server(event: Event) -> None:
-        """Close the monitoring server."""
-        await server.close()
+    async def close_monitors(event: Event) -> None:
+        """Close the Monitors object."""
+        await monitors.close()
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, close_server)
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, close_monitors)
 
-    all_sensors = []
-    for monitor_config in server_config[CONF_MONITORS]:
-        monitor_serial_number = {
-            CONF_MONITOR_SERIAL_NUMBER: monitor_config[CONF_SERIAL_NUMBER]
-        }
+    num_sensors = 0
+    for monitor_config in config[DOMAIN][CONF_MONITORS]:
+        num_sensors += len(monitor_config[CONF_CHANNELS])
+        num_sensors += len(monitor_config[CONF_PULSE_COUNTERS])
+        num_sensors += len(monitor_config[CONF_TEMPERATURE_SENSORS][CONF_SENSORS])
+        num_sensors += len(monitor_config[CONF_VOLTAGE_SENSORS])
 
-        channel_configs = monitor_config[CONF_CHANNELS]
-        for channel_config in channel_configs:
-            all_sensors.append(
-                {
-                    CONF_SENSOR_TYPE: SENSOR_TYPE_CURRENT,
-                    **monitor_serial_number,
-                    **channel_config,
-                }
-            )
-
-        voltage_configs = monitor_config[CONF_VOLTAGE_SENSORS]
-        for voltage_config in voltage_configs:
-            all_sensors.append(
-                {
-                    CONF_SENSOR_TYPE: SENSOR_TYPE_VOLTAGE,
-                    **monitor_serial_number,
-                    **voltage_config,
-                }
-            )
-
-        if sensor_configs := monitor_config[CONF_TEMPERATURE_SENSORS]:
-            temperature_unit = {
-                CONF_TEMPERATURE_UNIT: sensor_configs[CONF_TEMPERATURE_UNIT]
-            }
-            for sensor_config in sensor_configs[CONF_SENSORS]:
-                all_sensors.append(
-                    {
-                        CONF_SENSOR_TYPE: SENSOR_TYPE_TEMPERATURE,
-                        **monitor_serial_number,
-                        **temperature_unit,
-                        **sensor_config,
-                    }
-                )
-
-        counter_configs = monitor_config[CONF_PULSE_COUNTERS]
-        for counter_config in counter_configs:
-            all_sensors.append(
-                {
-                    CONF_SENSOR_TYPE: SENSOR_TYPE_PULSE_COUNTER,
-                    **monitor_serial_number,
-                    **counter_config,
-                }
-            )
-
-    if not all_sensors:
+    if num_sensors == 0:
         _LOGGER.error(
             "Configuration must specify at least one "
             "channel, voltage, pulse counter or temperature sensor"
@@ -193,7 +154,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         return False
 
     hass.async_create_task(
-        async_load_platform(hass, "sensor", DOMAIN, {CONF_SENSORS: all_sensors}, config)
+        async_load_platform(hass, Platform.SENSOR, DOMAIN, config[DOMAIN], config)
     )
 
     return True

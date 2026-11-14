@@ -1,13 +1,13 @@
 {
   "domain": "prosegur",
   "name": "Prosegur Alarm",
+  "categories": ["security_safety.alarm_systems"],
+  "codeowners": ["@dgomes"],
   "config_flow": true,
+  "connectivity": ["cloud"],
   "documentation": "https://www.home-assistant.io/integrations/prosegur",
-  "requirements": [
-    "pyprosegur==0.0.5"
-  ],
-  "codeowners": [
-    "@dgomes"
-  ],
-  "iot_class": "cloud_polling"
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "loggers": ["pyprosegur"],
+  "requirements": ["pyprosegur==0.0.14"]
 }

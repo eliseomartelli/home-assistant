@@ -1,8 +1,13 @@
 {
   "domain": "volkszaehler",
   "name": "Volkszaehler",
+  "categories": ["energy.meters_monitoring"],
+  "codeowners": ["@StefanSchoof"],
+  "config_flow": true,
+  "connectivity": ["network"],
   "documentation": "https://www.home-assistant.io/integrations/volkszaehler",
-  "requirements": ["volkszaehler==0.2.1"],
-  "codeowners": ["@fabaff"],
-  "iot_class": "local_polling"
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "loggers": ["volkszaehler"],
+  "requirements": ["volkszaehler==0.4.0"]
 }

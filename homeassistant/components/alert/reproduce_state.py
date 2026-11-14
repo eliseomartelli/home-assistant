@@ -1,23 +1,16 @@
-"""Reproduce an Alert state."""
-from __future__ import annotations
+"""Reproduce an Alert state.
+
+DEVELOPMENT OF THE ALERT INTEGRATION IS FROZEN.
+"""
 
 import asyncio
 from collections.abc import Iterable
-import logging
 from typing import Any
 
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    SERVICE_TURN_OFF,
-    SERVICE_TURN_ON,
-    STATE_OFF,
-    STATE_ON,
-)
+from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import Context, HomeAssistant, State
 
-from . import DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
+from .const import DOMAIN, LOGGER, AlertService
 
 VALID_STATES = {STATE_ON, STATE_OFF}
 
@@ -31,11 +24,11 @@ async def _async_reproduce_state(
 ) -> None:
     """Reproduce a single state."""
     if (cur_state := hass.states.get(state.entity_id)) is None:
-        _LOGGER.warning("Unable to find entity %s", state.entity_id)
+        LOGGER.warning("Unable to find entity %s", state.entity_id)
         return
 
     if state.state not in VALID_STATES:
-        _LOGGER.warning(
+        LOGGER.warning(
             "Invalid state specified for %s: %s", state.entity_id, state.state
         )
         return
@@ -47,10 +40,10 @@ async def _async_reproduce_state(
     service_data = {ATTR_ENTITY_ID: state.entity_id}
 
     if state.state == STATE_ON:
-        service = SERVICE_TURN_ON
+        service = AlertService.TURN_ON
 
     elif state.state == STATE_OFF:
-        service = SERVICE_TURN_OFF
+        service = AlertService.TURN_OFF
 
     await hass.services.async_call(
         DOMAIN, service, service_data, context=context, blocking=True

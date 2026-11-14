@@ -1,31 +1,38 @@
 """Support for getting temperature from TEMPer devices."""
+
 import logging
 
+import probatio
 from temperusb.temper import TemperHandler
-import voluptuous as vol
 
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
+from homeassistant.components.sensor import (
+    PLATFORM_SCHEMA as SENSOR_PLATFORM_SCHEMA,
+    SensorDeviceClass,
+    SensorEntity,
+)
 from homeassistant.const import (
     CONF_NAME,
     CONF_OFFSET,
-    DEVICE_CLASS_TEMPERATURE,
     DEVICE_DEFAULT_NAME,
-    TEMP_CELSIUS,
+    UnitOfTemperature,
 )
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SCALE = "scale"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+PLATFORM_SCHEMA = SENSOR_PLATFORM_SCHEMA.extend(
     {
-        vol.Optional(CONF_NAME, default=DEVICE_DEFAULT_NAME): vol.Coerce(str),
-        vol.Optional(CONF_SCALE, default=1): vol.Coerce(float),
-        vol.Optional(CONF_OFFSET, default=0): vol.Coerce(float),
+        probatio.Optional(CONF_NAME, default=DEVICE_DEFAULT_NAME): probatio.Coerce(str),
+        probatio.Optional(CONF_SCALE, default=1): probatio.Coerce(float),
+        probatio.Optional(CONF_OFFSET, default=0): probatio.Coerce(float),
     }
 )
 
-TEMPER_SENSORS = []
+TEMPER_SENSORS: list[TemperSensor] = []
 
 
 def get_temper_devices():
@@ -33,7 +40,12 @@ def get_temper_devices():
     return TemperHandler().get_devices()
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+def setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up the Temper sensors."""
     prefix = name = config[CONF_NAME]
     scaling = {"scale": config.get(CONF_SCALE), "offset": config.get(CONF_OFFSET)}
@@ -47,21 +59,20 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
 
 
 def reset_devices():
-    """
-    Re-scan for underlying Temper sensors and assign them to our devices.
+    """Re-scan for underlying Temper sensors and assign them to our devices.
 
     This assumes the same sensor devices are present in the same order.
     """
     temper_devices = get_temper_devices()
-    for sensor, device in zip(TEMPER_SENSORS, temper_devices):
+    for sensor, device in zip(TEMPER_SENSORS, temper_devices, strict=False):
         sensor.set_temper_device(device)
 
 
 class TemperSensor(SensorEntity):
     """Representation of a Temper temperature sensor."""
 
-    _attr_device_class = DEVICE_CLASS_TEMPERATURE
-    _attr_native_unit_of_measurement = TEMP_CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
     def __init__(self, temper_device, name, scaling):
         """Initialize the sensor."""
@@ -78,7 +89,7 @@ class TemperSensor(SensorEntity):
         # set calibration data
         self.temper_device.set_calibration_data(scale=self.scale, offset=self.offset)
 
-    def update(self):
+    def update(self) -> None:
         """Retrieve latest state."""
         try:
             sensor_value = self.temper_device.get_temperature("celsius")

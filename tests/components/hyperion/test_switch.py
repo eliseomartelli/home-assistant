@@ -1,4 +1,5 @@
 """Tests for the Hyperion integration."""
+
 from datetime import timedelta
 from unittest.mock import AsyncMock, call, patch
 
@@ -9,6 +10,7 @@ from hyperion.const import (
     KEY_COMPONENTSTATE,
     KEY_STATE,
 )
+from pytest_homeassistant.common import async_fire_time_changed
 
 from homeassistant.components.hyperion import get_hyperion_device_id
 from homeassistant.components.hyperion.const import (
@@ -17,12 +19,12 @@ from homeassistant.components.hyperion.const import (
     HYPERION_MODEL_NAME,
     TYPE_HYPERION_COMPONENT_SWITCH_BASE,
 )
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SwitchService
 from homeassistant.config_entries import RELOAD_AFTER_UPDATE_DELAY
-from homeassistant.const import ATTR_ENTITY_ID, SERVICE_TURN_OFF, SERVICE_TURN_ON
+from homeassistant.const import CommonServiceArgument
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.util import dt, slugify
+from homeassistant.util import dt as dt_util, slugify
 
 from . import (
     TEST_CONFIG_ENTRY_ID,
@@ -34,8 +36,6 @@ from . import (
     register_test_entity,
     setup_test_config_entry,
 )
-
-from tests.common import async_fire_time_changed
 
 TEST_COMPONENTS = [
     {"enabled": True, "name": "ALL"},
@@ -75,8 +75,8 @@ async def test_switch_turn_on_off(hass: HomeAssistant) -> None:
     # Turn switch off.
     await hass.services.async_call(
         SWITCH_DOMAIN,
-        SERVICE_TURN_OFF,
-        {ATTR_ENTITY_ID: TEST_SWITCH_COMPONENT_ALL_ENTITY_ID},
+        SwitchService.TURN_OFF,
+        {CommonServiceArgument.ENTITY_ID: TEST_SWITCH_COMPONENT_ALL_ENTITY_ID},
         blocking=True,
     )
 
@@ -99,8 +99,8 @@ async def test_switch_turn_on_off(hass: HomeAssistant) -> None:
     # Turn switch on.
     await hass.services.async_call(
         SWITCH_DOMAIN,
-        SERVICE_TURN_ON,
-        {ATTR_ENTITY_ID: TEST_SWITCH_COMPONENT_ALL_ENTITY_ID},
+        SwitchService.TURN_ON,
+        {CommonServiceArgument.ENTITY_ID: TEST_SWITCH_COMPONENT_ALL_ENTITY_ID},
         blocking=True,
     )
 
@@ -144,7 +144,11 @@ async def test_switch_has_correct_entities(hass: HomeAssistant) -> None:
         assert entity_state, f"Couldn't find entity: {entity_id}"
 
 
-async def test_device_info(hass: HomeAssistant) -> None:
+async def test_device_info(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
     """Verify device information includes expected details."""
     client = create_mock_client()
     client.components = TEST_COMPONENTS
@@ -162,17 +166,17 @@ async def test_device_info(hass: HomeAssistant) -> None:
     assert hass.states.get(TEST_SWITCH_COMPONENT_ALL_ENTITY_ID) is not None
 
     device_identifer = get_hyperion_device_id(TEST_SYSINFO_ID, TEST_INSTANCE)
-    device_registry = dr.async_get(hass)
 
-    device = device_registry.async_get_device({(DOMAIN, device_identifer)})
+    device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, device_identifer), TEST_CONFIG_ENTRY_ID
+    )
     assert device
-    assert device.config_entries == {TEST_CONFIG_ENTRY_ID}
+    assert device.config_entry_id == TEST_CONFIG_ENTRY_ID
     assert device.identifiers == {(DOMAIN, device_identifer)}
     assert device.manufacturer == HYPERION_MANUFACTURER_NAME
     assert device.model == HYPERION_MODEL_NAME
     assert device.name == TEST_INSTANCE_1["friendly_name"]
 
-    entity_registry = await er.async_get_registry(hass)
     entities_from_device = [
         entry.entity_id
         for entry in er.async_entries_for_device(entity_registry, device.id)
@@ -184,13 +188,13 @@ async def test_device_info(hass: HomeAssistant) -> None:
         assert entity_id in entities_from_device
 
 
-async def test_switches_can_be_enabled(hass: HomeAssistant) -> None:
+async def test_switches_can_be_enabled(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> None:
     """Verify switches can be enabled."""
     client = create_mock_client()
     client.components = TEST_COMPONENTS
     await setup_test_config_entry(hass, hyperion_client=client)
-
-    entity_registry = er.async_get(hass)
 
     for component in TEST_COMPONENTS:
         name = slugify(KEY_COMPONENTID_TO_NAME[str(component["name"])])
@@ -199,7 +203,7 @@ async def test_switches_can_be_enabled(hass: HomeAssistant) -> None:
         entry = entity_registry.async_get(entity_id)
         assert entry
         assert entry.disabled
-        assert entry.disabled_by == er.DISABLED_INTEGRATION
+        assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
         entity_state = hass.states.get(entity_id)
         assert not entity_state
 
@@ -215,7 +219,7 @@ async def test_switches_can_be_enabled(hass: HomeAssistant) -> None:
 
             async_fire_time_changed(
                 hass,
-                dt.utcnow() + timedelta(seconds=RELOAD_AFTER_UPDATE_DELAY + 1),
+                dt_util.utcnow() + timedelta(seconds=RELOAD_AFTER_UPDATE_DELAY + 1),
             )
             await hass.async_block_till_done()
 

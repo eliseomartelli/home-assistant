@@ -1,98 +1,116 @@
 """Support for IKEA Tradfri covers."""
-from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, override
 
-from pytradfri.command import Command
+from pytradfri.api.aiocoap_api import APIRequestProtocol
 
-from homeassistant.components.cover import ATTR_POSITION, CoverEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.components.cover import (
+    ATTR_POSITION,
+    CoverEntity,
+    CoverEntityFeature,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .base_class import TradfriBaseDevice
-from .const import ATTR_MODEL, CONF_GATEWAY_ID, DEVICES, DOMAIN, KEY_API
+from .const import CONF_GATEWAY_ID
+from .coordinator import TradfriConfigEntry, TradfriDeviceDataUpdateCoordinator
+from .entity import TradfriBaseEntity
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: TradfriConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Load Tradfri covers based on a config entry."""
     gateway_id = config_entry.data[CONF_GATEWAY_ID]
-    tradfri_data = hass.data[DOMAIN][config_entry.entry_id]
-    api = tradfri_data[KEY_API]
-    devices = tradfri_data[DEVICES]
+    tradfri_data = config_entry.runtime_data
 
     async_add_entities(
-        TradfriCover(dev, api, gateway_id) for dev in devices if dev.has_blind_control
+        TradfriCover(
+            device_coordinator,
+            tradfri_data.api,
+            gateway_id,
+        )
+        for device_coordinator in tradfri_data.coordinator_list
+        if device_coordinator.device.has_blind_control
     )
 
 
-class TradfriCover(TradfriBaseDevice, CoverEntity):
+class TradfriCover(TradfriBaseEntity, CoverEntity):
     """The platform class required by Home Assistant."""
+
+    _attr_name = None
+    _attr_supported_features = (
+        CoverEntityFeature.OPEN
+        | CoverEntityFeature.CLOSE
+        | CoverEntityFeature.STOP
+        | CoverEntityFeature.SET_POSITION
+    )
 
     def __init__(
         self,
-        device: Command,
-        api: Callable[[Command | list[Command]], Any],
+        device_coordinator: TradfriDeviceDataUpdateCoordinator,
+        api: APIRequestProtocol,
         gateway_id: str,
     ) -> None:
-        """Initialize a cover."""
-        self._attr_unique_id = f"{gateway_id}-{device.id}"
-        super().__init__(device, api, gateway_id)
-        self._refresh(device, write_ha=False)
+        """Initialize a switch."""
+        super().__init__(
+            device_coordinator=device_coordinator,
+            api=api,
+            gateway_id=gateway_id,
+        )
+
+        if TYPE_CHECKING:
+            assert self._device.blind_control is not None
+        self._device_control = self._device.blind_control
+        self._device_data = self._device_control.blinds[0]
+
+    @callback
+    @override
+    def _refresh(self) -> None:
+        """Refresh the device."""
+        self._device_data = self._device_control.blinds[0]
 
     @property
+    @override
     def extra_state_attributes(self) -> dict[str, str] | None:
         """Return the state attributes."""
-        return {ATTR_MODEL: self._device.device_info.model_number}
+        return {"model": self._device.device_info.model_number}
 
     @property
+    @override
     def current_cover_position(self) -> int | None:
         """Return current position of cover.
 
         None is unknown, 0 is closed, 100 is fully open.
         """
-        if not self._device_data:
-            return None
-        return 100 - cast(int, self._device_data.current_cover_position)
+        position = self._device_data.current_cover_position
+        return None if position is None else 100 - position
 
+    @override
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         """Move the cover to a specific position."""
-        if not self._device_control:
-            return
         await self._api(self._device_control.set_state(100 - kwargs[ATTR_POSITION]))
 
+    @override
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
-        if not self._device_control:
-            return
         await self._api(self._device_control.set_state(0))
 
+    @override
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close cover."""
-        if not self._device_control:
-            return
         await self._api(self._device_control.set_state(100))
 
+    @override
     async def async_stop_cover(self, **kwargs: Any) -> None:
         """Close cover."""
-        if not self._device_control:
-            return
         await self._api(self._device_control.trigger_blind())
 
     @property
-    def is_closed(self) -> bool:
+    @override
+    def is_closed(self) -> bool | None:
         """Return if the cover is closed or not."""
-        return self.current_cover_position == 0
-
-    def _refresh(self, device: Command, write_ha: bool = True) -> None:
-        """Refresh the cover data."""
-        # Caching of BlindControl and cover object
-        self._device = device
-        self._device_control = device.blind_control
-        self._device_data = device.blind_control.blinds[0]
-        super()._refresh(device, write_ha=write_ha)
+        position = self.current_cover_position
+        return None if position is None else position == 0

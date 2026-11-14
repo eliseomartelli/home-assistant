@@ -2,13 +2,7 @@
 
 from datetime import timedelta
 
-from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_BILLION,
-    CONCENTRATION_PARTS_PER_MILLION,
-    PERCENTAGE,
-)
+from homeassistant.const import Platform, UnitOfDensity, UnitOfRatio
 
 DOMAIN = "kaiterra"
 
@@ -54,13 +48,13 @@ ATTR_AQI_POLLUTANT = "air_quality_index_pollutant"
 AVAILABLE_AQI_STANDARDS = ["us", "cn", "in"]
 AVAILABLE_UNITS = [
     "x",
-    PERCENTAGE,
+    UnitOfRatio.PERCENTAGE,
     "C",
     "F",
-    CONCENTRATION_MILLIGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_MILLION,
-    CONCENTRATION_PARTS_PER_BILLION,
+    UnitOfDensity.MILLIGRAMS_PER_CUBIC_METER,
+    UnitOfDensity.MICROGRAMS_PER_CUBIC_METER,
+    UnitOfRatio.PARTS_PER_MILLION,
+    UnitOfRatio.PARTS_PER_BILLION,
 ]
 AVAILABLE_DEVICE_TYPES = ["laseregg", "sensedge"]
 
@@ -68,7 +62,7 @@ CONF_AQI_STANDARD = "aqi_standard"
 CONF_PREFERRED_UNITS = "preferred_units"
 
 DEFAULT_AQI_STANDARD = "us"
-DEFAULT_PREFERRED_UNIT = []
+DEFAULT_PREFERRED_UNIT: list[str] = []
 DEFAULT_SCAN_INTERVAL = timedelta(seconds=30)
 
-PLATFORMS = ["sensor", "air_quality"]
+PLATFORMS = [Platform.AIR_QUALITY, Platform.SENSOR]

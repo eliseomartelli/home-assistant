@@ -1,23 +1,20 @@
 """The lookin integration sensor platform."""
-from __future__ import annotations
 
 import logging
+from typing import override
 
 from homeassistant.components.sensor import (
-    DEVICE_CLASS_HUMIDITY,
-    DEVICE_CLASS_TEMPERATURE,
-    STATE_CLASS_MEASUREMENT,
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
+    SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, TEMP_CELSIUS
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN
 from .entity import LookinDeviceCoordinatorEntity
-from .models import LookinData
+from .models import LookinConfigEntry, LookinData
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,31 +23,35 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="temperature",
         name="Temperature",
-        native_unit_of_measurement=TEMP_CELSIUS,
-        device_class=DEVICE_CLASS_TEMPERATURE,
-        state_class=STATE_CLASS_MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
         key="humidity",
         name="Humidity",
         native_unit_of_measurement=PERCENTAGE,
-        device_class=DEVICE_CLASS_HUMIDITY,
-        state_class=STATE_CLASS_MEASUREMENT,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
     ),
 )
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    config_entry: LookinConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up lookin sensors from the config entry."""
-    lookin_data: LookinData = hass.data[DOMAIN][config_entry.entry_id]
+    lookin_data = config_entry.runtime_data
 
-    async_add_entities(
-        [LookinSensorEntity(description, lookin_data) for description in SENSOR_TYPES]
-    )
+    if lookin_data.lookin_device.model >= 2:
+        async_add_entities(
+            [
+                LookinSensorEntity(description, lookin_data)
+                for description in SENSOR_TYPES
+            ]
+        )
 
 
 class LookinSensorEntity(LookinDeviceCoordinatorEntity, SensorEntity):
@@ -66,6 +67,8 @@ class LookinSensorEntity(LookinDeviceCoordinatorEntity, SensorEntity):
         self._attr_native_value = getattr(self.coordinator.data, description.key)
         self._attr_unique_id = f"{self._lookin_device.id}-{description.key}"
 
+    @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Update the state of the entity."""
         self._attr_native_value = getattr(

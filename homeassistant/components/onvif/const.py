@@ -1,30 +1,30 @@
 """Constants for the onvif component."""
+
+import asyncio
+from datetime import timedelta
 import logging
+
+import aiohttp
+from onvif.exceptions import ONVIFError
+from zeep.exceptions import Fault, TransportError
 
 LOGGER = logging.getLogger(__package__)
 
 DOMAIN = "onvif"
 
-DEFAULT_NAME = "ONVIF Camera"
-DEFAULT_PORT = 5000
-DEFAULT_USERNAME = "admin"
-DEFAULT_PASSWORD = "888888"
+DEFAULT_PORT = 80
 DEFAULT_ARGUMENTS = "-pred 1"
 
 CONF_DEVICE_ID = "deviceid"
-CONF_RTSP_TRANSPORT = "rtsp_transport"
+CONF_HARDWARE = "hardware"
 CONF_SNAPSHOT_AUTH = "snapshot_auth"
+CONF_ENABLE_WEBHOOKS = "enable_webhooks"
+CONF_MORE_OPTIONS = "more_options"
+DEFAULT_ENABLE_WEBHOOKS = True
 
-RTSP_TRANS_PROTOCOLS = ["tcp", "udp", "udp_multicast", "http"]
-
-ATTR_PAN = "pan"
-ATTR_TILT = "tilt"
-ATTR_ZOOM = "zoom"
-ATTR_DISTANCE = "distance"
-ATTR_SPEED = "speed"
-ATTR_MOVE_MODE = "move_mode"
-ATTR_CONTINUOUS_DURATION = "continuous_duration"
-ATTR_PRESET = "preset"
+# Bounds each snapshot auth probe during setup, tighter than the library's
+# default so a camera whose snapshot never completes does not stall setup
+SNAPSHOT_TIMEOUT = timedelta(seconds=10)
 
 DIR_UP = "UP"
 DIR_DOWN = "DOWN"
@@ -41,4 +41,13 @@ ABSOLUTE_MOVE = "AbsoluteMove"
 GOTOPRESET_MOVE = "GotoPreset"
 STOP_MOVE = "Stop"
 
-SERVICE_PTZ = "ptz"
+
+# Some cameras don't support the GetServiceCapabilities call
+# and will return a 404 error which is caught by TransportError
+GET_CAPABILITIES_EXCEPTIONS = (
+    ONVIFError,
+    Fault,
+    aiohttp.ClientError,
+    asyncio.TimeoutError,
+    TransportError,
+)

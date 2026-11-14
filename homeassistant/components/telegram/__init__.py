@@ -1,4 +1,1 @@
-"""The telegram component."""
-
-DOMAIN = "telegram"
-PLATFORMS = ["notify"]
+"""The Telegram component."""

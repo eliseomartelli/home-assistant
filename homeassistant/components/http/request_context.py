@@ -1,5 +1,4 @@
 """Middleware to set the request context."""
-from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -7,6 +6,7 @@ from contextvars import ContextVar
 from aiohttp.web import Application, Request, StreamResponse, middleware
 
 from homeassistant.core import callback
+from homeassistant.helpers.http import current_request  # noqa: F401
 
 
 @callback

@@ -1,130 +1,35 @@
 """Tests for rainforest eagle sensors."""
-from unittest.mock import AsyncMock, Mock, patch
 
+from copy import deepcopy
+from datetime import timedelta
+from unittest.mock import Mock
+
+from freezegun.api import FrozenDateTimeFactory
 import pytest
+from pytest_homeassistant.common import async_fire_time_changed
 
-from homeassistant.components.rainforest_eagle.const import (
-    CONF_CLOUD_ID,
-    CONF_HARDWARE_ADDRESS,
-    CONF_INSTALL_CODE,
-    DOMAIN,
-    TYPE_EAGLE_100,
-    TYPE_EAGLE_200,
-)
-from homeassistant.const import CONF_HOST, CONF_TYPE
-from homeassistant.setup import async_setup_component
+from homeassistant.components.rainforest_eagle.const import DOMAIN
+from homeassistant.const import STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
 
-from tests.common import MockConfigEntry
-
-MOCK_CLOUD_ID = "12345"
-MOCK_200_RESPONSE_WITH_PRICE = {
-    "zigbee:InstantaneousDemand": {
-        "Name": "zigbee:InstantaneousDemand",
-        "Value": "1.152000",
-    },
-    "zigbee:CurrentSummationDelivered": {
-        "Name": "zigbee:CurrentSummationDelivered",
-        "Value": "45251.285000",
-    },
-    "zigbee:CurrentSummationReceived": {
-        "Name": "zigbee:CurrentSummationReceived",
-        "Value": "232.232000",
-    },
-    "zigbee:Price": {"Name": "zigbee:Price", "Value": "0.053990"},
-    "zigbee:PriceCurrency": {"Name": "zigbee:PriceCurrency", "Value": "USD"},
-}
-MOCK_200_RESPONSE_WITHOUT_PRICE = {
-    "zigbee:InstantaneousDemand": {
-        "Name": "zigbee:InstantaneousDemand",
-        "Value": "1.152000",
-    },
-    "zigbee:CurrentSummationDelivered": {
-        "Name": "zigbee:CurrentSummationDelivered",
-        "Value": "45251.285000",
-    },
-    "zigbee:CurrentSummationReceived": {
-        "Name": "zigbee:CurrentSummationReceived",
-        "Value": "232.232000",
-    },
-    "zigbee:Price": {"Name": "zigbee:Price", "Value": "invalid"},
-    "zigbee:PriceCurrency": {"Name": "zigbee:PriceCurrency", "Value": "USD"},
-}
+from . import MOCK_200_RESPONSE_WITH_PRICE, MOCK_200_RESPONSE_WITHOUT_PRICE
 
 
-@pytest.fixture
-async def setup_rainforest_200(hass):
-    """Set up rainforest."""
-    MockConfigEntry(
-        domain="rainforest_eagle",
-        data={
-            CONF_CLOUD_ID: MOCK_CLOUD_ID,
-            CONF_HOST: "192.168.1.55",
-            CONF_INSTALL_CODE: "abcdefgh",
-            CONF_HARDWARE_ADDRESS: "mock-hw-address",
-            CONF_TYPE: TYPE_EAGLE_200,
-        },
-    ).add_to_hass(hass)
-    with patch(
-        "aioeagle.ElectricMeter.create_instance",
-        return_value=Mock(
-            get_device_query=AsyncMock(return_value=MOCK_200_RESPONSE_WITHOUT_PRICE)
-        ),
-    ) as mock_update:
-        mock_update.return_value.is_connected = True
-        assert await async_setup_component(hass, DOMAIN, {})
-        await hass.async_block_till_done()
-        yield mock_update.return_value
-
-
-@pytest.fixture
-async def setup_rainforest_100(hass):
-    """Set up rainforest."""
-    MockConfigEntry(
-        domain="rainforest_eagle",
-        data={
-            CONF_CLOUD_ID: MOCK_CLOUD_ID,
-            CONF_HOST: "192.168.1.55",
-            CONF_INSTALL_CODE: "abcdefgh",
-            CONF_HARDWARE_ADDRESS: None,
-            CONF_TYPE: TYPE_EAGLE_100,
-        },
-    ).add_to_hass(hass)
-    with patch(
-        "homeassistant.components.rainforest_eagle.data.Eagle100Reader",
-        return_value=Mock(
-            get_instantaneous_demand=Mock(
-                return_value={"InstantaneousDemand": {"Demand": "1.152000"}}
-            ),
-            get_current_summation=Mock(
-                return_value={
-                    "CurrentSummation": {
-                        "SummationDelivered": "45251.285000",
-                        "SummationReceived": "232.232000",
-                    }
-                }
-            ),
-        ),
-    ) as mock_update:
-        assert await async_setup_component(hass, DOMAIN, {})
-        await hass.async_block_till_done()
-        yield mock_update
-
-
-async def test_sensors_200(hass, setup_rainforest_200):
+async def test_sensors_200(hass: HomeAssistant, setup_rainforest_200) -> None:
     """Test the sensors."""
     assert len(hass.states.async_all()) == 3
 
-    demand = hass.states.get("sensor.eagle_200_meter_power_demand")
+    demand = hass.states.get("sensor.eagle_200_power_demand")
     assert demand is not None
     assert demand.state == "1.152000"
     assert demand.attributes["unit_of_measurement"] == "kW"
 
-    delivered = hass.states.get("sensor.eagle_200_total_meter_energy_delivered")
+    delivered = hass.states.get("sensor.eagle_200_total_energy_delivered")
     assert delivered is not None
     assert delivered.state == "45251.285000"
     assert delivered.attributes["unit_of_measurement"] == "kWh"
 
-    received = hass.states.get("sensor.eagle_200_total_meter_energy_received")
+    received = hass.states.get("sensor.eagle_200_total_energy_received")
     assert received is not None
     assert received.state == "232.232000"
     assert received.attributes["unit_of_measurement"] == "kWh"
@@ -137,27 +42,95 @@ async def test_sensors_200(hass, setup_rainforest_200):
 
     assert len(hass.states.async_all()) == 4
 
-    price = hass.states.get("sensor.meter_price")
+    price = hass.states.get("sensor.eagle_200_energy_price")
     assert price is not None
     assert price.state == "0.053990"
     assert price.attributes["unit_of_measurement"] == "USD/kWh"
 
 
-async def test_sensors_100(hass, setup_rainforest_100):
+async def test_sensors_100(hass: HomeAssistant, setup_rainforest_100) -> None:
     """Test the sensors."""
     assert len(hass.states.async_all()) == 3
 
-    demand = hass.states.get("sensor.eagle_200_meter_power_demand")
+    demand = hass.states.get("sensor.eagle_100_power_demand")
     assert demand is not None
     assert demand.state == "1.152000"
     assert demand.attributes["unit_of_measurement"] == "kW"
 
-    delivered = hass.states.get("sensor.eagle_200_total_meter_energy_delivered")
+    delivered = hass.states.get("sensor.eagle_100_total_energy_delivered")
     assert delivered is not None
     assert delivered.state == "45251.285000"
     assert delivered.attributes["unit_of_measurement"] == "kWh"
 
-    received = hass.states.get("sensor.eagle_200_total_meter_energy_received")
+    received = hass.states.get("sensor.eagle_100_total_energy_received")
     assert received is not None
     assert received.state == "232.232000"
     assert received.attributes["unit_of_measurement"] == "kWh"
+
+
+async def _refresh(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> None:
+    """Advance to the next coordinator poll."""
+    freezer.tick(timedelta(seconds=30))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+@pytest.mark.parametrize(
+    ("variable", "entity_id", "valid_state"),
+    [
+        pytest.param(
+            "zigbee:CurrentSummationDelivered",
+            "sensor.eagle_200_total_energy_delivered",
+            "45251.285000",
+            id="delivered",
+        ),
+        pytest.param(
+            "zigbee:CurrentSummationReceived",
+            "sensor.eagle_200_total_energy_received",
+            "232.232000",
+            id="received",
+        ),
+    ],
+)
+async def test_invalid_summation_200(
+    hass: HomeAssistant,
+    setup_rainforest_200: Mock,
+    freezer: FrozenDateTimeFactory,
+    caplog: pytest.LogCaptureFixture,
+    variable: str,
+    entity_id: str,
+    valid_state: str,
+) -> None:
+    """Test a summation at the top of the 48-bit range is ignored."""
+    invalid_response = deepcopy(MOCK_200_RESPONSE_WITHOUT_PRICE)
+    # 0xfffffffffff0 Wh, as reported by a meter in place of a real reading.
+    invalid_response[variable]["Value"] = "281474976710.640"
+    setup_rainforest_200.get_device_query.return_value = invalid_response
+
+    await _refresh(hass, freezer)
+
+    assert hass.states.get(entity_id).state == STATE_UNKNOWN
+    assert f"Ignoring invalid {variable} from meter" in caplog.text
+
+    setup_rainforest_200.get_device_query.return_value = MOCK_200_RESPONSE_WITHOUT_PRICE
+
+    await _refresh(hass, freezer)
+
+    assert hass.states.get(entity_id).state == valid_state
+
+
+async def test_non_numeric_summation_200(
+    hass: HomeAssistant,
+    setup_rainforest_200: Mock,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Test a non-numeric summation does not make the other sensors unavailable."""
+    response = deepcopy(MOCK_200_RESPONSE_WITHOUT_PRICE)
+    response["zigbee:CurrentSummationDelivered"]["Value"] = "invalid"
+    setup_rainforest_200.get_device_query.return_value = response
+    await _refresh(hass, freezer)
+
+    assert hass.states.get("sensor.eagle_200_power_demand").state == "1.152000"
+    assert hass.states.get("sensor.eagle_200_total_energy_received").state == (
+        "232.232000"
+    )

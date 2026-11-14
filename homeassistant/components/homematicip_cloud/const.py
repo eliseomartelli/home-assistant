@@ -1,31 +1,31 @@
-"""Constants for the HomematicIP Cloud component."""
-import logging
+"""Constants for the HomematicIP Cloud integration."""
 
-from homeassistant.components.alarm_control_panel import (
-    DOMAIN as ALARM_CONTROL_PANEL_DOMAIN,
-)
-from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
-from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
-from homeassistant.components.cover import DOMAIN as COVER_DOMAIN
-from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
-from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
-from homeassistant.components.weather import DOMAIN as WEATHER_DOMAIN
+from homematicip.base.enums import DeviceType, FunctionalChannelType
 
-_LOGGER = logging.getLogger(".")
+from homeassistant.const import Platform
 
 DOMAIN = "homematicip_cloud"
 
 PLATFORMS = [
-    ALARM_CONTROL_PANEL_DOMAIN,
-    BINARY_SENSOR_DOMAIN,
-    CLIMATE_DOMAIN,
-    COVER_DOMAIN,
-    LIGHT_DOMAIN,
-    SENSOR_DOMAIN,
-    SWITCH_DOMAIN,
-    WEATHER_DOMAIN,
+    Platform.ALARM_CONTROL_PANEL,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.CLIMATE,
+    Platform.COVER,
+    Platform.EVENT,
+    Platform.FAN,
+    Platform.LIGHT,
+    Platform.LOCK,
+    Platform.SENSOR,
+    Platform.SIREN,
+    Platform.SWITCH,
+    Platform.VALVE,
+    Platform.WEATHER,
 ]
+
+MODE_AWAY = "away"
+MODE_HOME = "home"
+SIGNAL_ARMING_BLOCKED = f"{DOMAIN}_arming_blocked_{{}}"
 
 CONF_ACCESSPOINT = "accesspoint"
 CONF_AUTHTOKEN = "authtoken"
@@ -34,3 +34,15 @@ HMIPC_NAME = "name"
 HMIPC_HAPID = "hapid"
 HMIPC_AUTHTOKEN = "authtoken"
 HMIPC_PIN = "pin"
+
+SWITCH_CHANNEL_TYPES = (
+    FunctionalChannelType.SWITCH_CHANNEL,
+    FunctionalChannelType.SWITCH_MEASURING_CHANNEL,
+    FunctionalChannelType.MULTI_MODE_INPUT_SWITCH_CHANNEL,
+)
+
+# these carry a switch channel, but their entity is a light
+LIGHT_OWNED_DEVICE_TYPES = (
+    DeviceType.BRAND_SWITCH_NOTIFICATION_LIGHT,
+    DeviceType.BRAND_SWITCH_MEASURING,
+)

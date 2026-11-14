@@ -1,11 +1,25 @@
 """API for Honeywell Lyric bound to Home Assistant OAuth."""
-from typing import cast
 
-from aiohttp import BasicAuth, ClientSession
+from typing import cast, override
+
+from aiohttp import ClientSession, encode_basic_auth
 from aiolyric.client import LyricClient
 
+from homeassistant.components.application_credentials import AuthImplementation
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+
+class OAuth2SessionLyric(config_entry_oauth2_flow.OAuth2Session):
+    """OAuth2Session for Lyric."""
+
+    async def force_refresh_token(self) -> None:
+        """Force a token refresh."""
+        new_token = await self.implementation.async_refresh_token(self.token)
+
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data={**self.config_entry.data, "token": new_token}
+        )
 
 
 class ConfigEntryLyricClient(LyricClient):
@@ -20,19 +34,26 @@ class ConfigEntryLyricClient(LyricClient):
         super().__init__(websession)
         self._oauth_session = oauth_session
 
-    async def async_get_access_token(self):
+    @override
+    async def async_get_access_token(self) -> str:
         """Return a valid access token."""
-        if not self._oauth_session.valid_token:
-            await self._oauth_session.async_ensure_token_valid()
+        await self._oauth_session.async_ensure_token_valid()
 
         return self._oauth_session.token["access_token"]
 
 
 class LyricLocalOAuth2Implementation(
-    config_entry_oauth2_flow.LocalOAuth2Implementation
+    AuthImplementation,
 ):
     """Lyric Local OAuth2 implementation."""
 
+    @property
+    @override
+    def extra_authorize_data(self) -> dict:
+        """Prompt the user to choose between Resideo and First Alert apps."""
+        return {"appSelect": "1"}
+
+    @override
     async def _token_request(self, data: dict) -> dict:
         """Make a token request."""
         session = async_get_clientsession(self.hass)
@@ -43,7 +64,7 @@ class LyricLocalOAuth2Implementation(
             data["client_secret"] = self.client_secret
 
         headers = {
-            "Authorization": BasicAuth(self.client_id, self.client_secret).encode(),
+            "Authorization": encode_basic_auth(self.client_id, self.client_secret),
             "Content-Type": "application/x-www-form-urlencoded",
         }
 

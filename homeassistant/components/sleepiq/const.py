@@ -1,11 +1,52 @@
 """Define constants for the SleepIQ component."""
 
+from homeassistant.const import PRESSURE
+
+DATA_SLEEPIQ = "data_sleepiq"
 DOMAIN = "sleepiq"
 
+ACTUATOR = "actuator"
+CORE_CLIMATE_TIMER = "core_climate_timer"
+CORE_CLIMATE = "core_climate"
+BED = "bed"
+FIRMNESS = "firmness"
+FAVORITE_FIRMNESS = "favorite_firmness"
+ICON_EMPTY = "mdi:bed-empty"
+ICON_OCCUPIED = "mdi:bed"
 IS_IN_BED = "is_in_bed"
 SLEEP_NUMBER = "sleep_number"
-SENSOR_TYPES = {SLEEP_NUMBER: "SleepNumber", IS_IN_BED: "Is In Bed"}
+FOOT_WARMING_TIMER = "foot_warming_timer"
+FOOT_WARMER = "foot_warmer"
+SLEEP_SCORE = "sleep_score"
+SLEEP_DURATION = "sleep_duration"
+HEART_RATE = "heart_rate"
+RESPIRATORY_RATE = "respiratory_rate"
+HRV = "hrv"
+BEDTIME = "bedtime"
+WAKE_TIME = "wake_time"
+ENTITY_TYPES = {
+    ACTUATOR: "Position",
+    CORE_CLIMATE_TIMER: "Core Climate Timer",
+    CORE_CLIMATE: "Core Climate",
+    FIRMNESS: "Firmness",
+    FAVORITE_FIRMNESS: "Favorite Firmness",
+    PRESSURE: "Pressure",
+    IS_IN_BED: "Is In Bed",
+    SLEEP_NUMBER: "SleepNumber",
+    FOOT_WARMING_TIMER: "Foot Warming Timer",
+    FOOT_WARMER: "Foot Warmer",
+    SLEEP_SCORE: "Sleep Score",
+    SLEEP_DURATION: "Sleep Duration",
+    HEART_RATE: "Heart Rate Average",
+    RESPIRATORY_RATE: "Respiratory Rate Average",
+    HRV: "Heart Rate Variability",
+    BEDTIME: "Bedtime",
+    WAKE_TIME: "Wake Time",
+}
 
 LEFT = "left"
 RIGHT = "right"
 SIDES = [LEFT, RIGHT]
+
+SLEEPIQ_DATA = "sleepiq_data"
+SLEEPIQ_STATUS_COORDINATOR = "sleepiq_status"

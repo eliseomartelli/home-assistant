@@ -1,70 +1,47 @@
 """Helpers for Waze Travel Time integration."""
-import re
 
-from WazeRouteCalculator import WazeRouteCalculator, WRCError
+import logging
 
-from homeassistant.components.waze_travel_time.const import ENTITY_ID_PATTERN
-from homeassistant.const import ATTR_LATITUDE, ATTR_LONGITUDE
-from homeassistant.helpers import location
+from pywaze.route_calculator import WazeRouteCalculator, WRCError
 
+from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.httpx_client import get_async_client
+from homeassistant.helpers.location import find_coordinates
 
-def is_valid_config_entry(hass, logger, origin, destination, region):
-    """Return whether the config entry data is valid."""
-    origin = resolve_location(hass, logger, origin)
-    destination = resolve_location(hass, logger, destination)
-    try:
-        WazeRouteCalculator(origin, destination, region).calc_all_routes_info()
-    except WRCError:
-        return False
-    return True
+_LOGGER = logging.getLogger(__name__)
 
 
-def resolve_location(hass, logger, loc):
-    """Resolve a location."""
-    if re.fullmatch(ENTITY_ID_PATTERN, loc):
-        return get_location_from_entity(hass, logger, loc)
-
-    return resolve_zone(hass, loc)
-
-
-def get_location_from_entity(hass, logger, entity_id):
-    """Get the location from the entity_id."""
-    if (state := hass.states.get(entity_id)) is None:
-        logger.error("Unable to find entity %s", entity_id)
+def base_coordinates_to_tuple(
+    base_coordinates: dict[str, float] | None,
+) -> tuple[float, float] | None:
+    """Convert Home Assistant location data to Waze base coordinates."""
+    if base_coordinates is None:
         return None
 
-    # Check if the entity has location attributes.
-    if location.has_location(state):
-        logger.debug("Getting %s location", entity_id)
-        return _get_location_from_attributes(state)
-
-    # Check if device is inside a zone.
-    zone_state = hass.states.get(f"zone.{state.state}")
-    if location.has_location(zone_state):
-        logger.debug(
-            "%s is in %s, getting zone location", entity_id, zone_state.entity_id
-        )
-        return _get_location_from_attributes(zone_state)
-
-    # If zone was not found in state then use the state as the location.
-    if entity_id.startswith("sensor."):
-        return state.state
-
-    # When everything fails just return nothing.
-    return None
+    return (base_coordinates[CONF_LATITUDE], base_coordinates[CONF_LONGITUDE])
 
 
-def resolve_zone(hass, friendly_name):
-    """Get a lat/long from a zones friendly_name."""
-    states = hass.states.all()
-    for state in states:
-        if state.domain == "zone" and state.name == friendly_name:
-            return _get_location_from_attributes(state)
+def default_base_coordinates_for_region(region: str) -> dict[str, float]:
+    """Return pywaze's default base coordinates for a region."""
+    base_coordinates = WazeRouteCalculator.BASE_COORDS[region.upper()]
+    return {
+        CONF_LATITUDE: base_coordinates["lat"],
+        CONF_LONGITUDE: base_coordinates["lon"],
+    }
 
-    return friendly_name
 
-
-def _get_location_from_attributes(state):
-    """Get the lat/long string from an states attributes."""
-    attr = state.attributes
-    return f"{attr.get(ATTR_LATITUDE)},{attr.get(ATTR_LONGITUDE)}"
+async def is_valid_config_entry(
+    hass: HomeAssistant, origin: str, destination: str, region: str
+) -> bool:
+    """Return whether the config entry data is valid."""
+    resolved_origin = find_coordinates(hass, origin)
+    resolved_destination = find_coordinates(hass, destination)
+    httpx_client = get_async_client(hass)
+    async with WazeRouteCalculator(region=region, client=httpx_client) as client:
+        try:
+            await client.calc_routes(resolved_origin, resolved_destination)
+        except WRCError as error:
+            _LOGGER.error("Error trying to validate entry: %s", error)
+            return False
+    return True

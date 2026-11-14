@@ -1,8 +1,13 @@
 {
   "domain": "lupusec",
   "name": "Lupus Electronics LUPUSEC",
+  "categories": ["security_safety.alarm_systems"],
+  "codeowners": ["@majuss", "@suaveolent"],
+  "config_flow": true,
+  "connectivity": ["network"],
   "documentation": "https://www.home-assistant.io/integrations/lupusec",
-  "requirements": ["lupupy==0.0.21"],
-  "codeowners": ["@majuss"],
-  "iot_class": "local_polling"
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "loggers": ["lupupy"],
+  "requirements": ["lupupy==0.3.2"]
 }

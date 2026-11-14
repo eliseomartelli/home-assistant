@@ -1,16 +1,25 @@
 """Alarm sensors for the Venstar Thermostat."""
+
+from typing import override
+
 from homeassistant.components.binary_sensor import (
-    DEVICE_CLASS_PROBLEM,
+    BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import VenstarEntity
-from .const import DOMAIN
+from .coordinator import VenstarConfigEntry
+from .entity import VenstarEntity
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: VenstarConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
     """Set up Vensar device binary_sensors based on a config entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]
+    coordinator = config_entry.runtime_data
 
     if coordinator.client.alerts is None:
         return
@@ -23,18 +32,21 @@ async def async_setup_entry(hass, config_entry, async_add_entities) -> None:
 class VenstarBinarySensor(VenstarEntity, BinarySensorEntity):
     """Represent a Venstar alert."""
 
-    _attr_device_class = DEVICE_CLASS_PROBLEM
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
     def __init__(self, coordinator, config, alert):
         """Initialize the alert."""
         super().__init__(coordinator, config)
         self.alert = alert
         self._attr_unique_id = f"{config.entry_id}_{alert.replace(' ', '_')}"
-        self._attr_name = f"{self._client.name} {alert}"
+        self._attr_name = alert
 
     @property
-    def is_on(self):
+    @override
+    def is_on(self) -> bool | None:
         """Return true if the binary sensor is on."""
+        if self._client.alerts is None:
+            return None
         for alert in self._client.alerts:
             if alert["name"] == self.alert:
                 return alert["active"]

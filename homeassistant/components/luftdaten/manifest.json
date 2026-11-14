@@ -1,10 +1,13 @@
 {
   "domain": "luftdaten",
-  "name": "Luftdaten",
+  "name": "Sensor.Community",
+  "categories": ["weather_alerts.air_quality_pollen"],
+  "codeowners": ["@fabaff", "@frenck"],
   "config_flow": true,
+  "connectivity": ["cloud"],
   "documentation": "https://www.home-assistant.io/integrations/luftdaten",
-  "requirements": ["luftdaten==0.6.5"],
-  "codeowners": ["@fabaff"],
-  "quality_scale": "gold",
-  "iot_class": "cloud_polling"
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "loggers": ["luftdaten"],
+  "requirements": ["luftdaten==0.8.0"]
 }

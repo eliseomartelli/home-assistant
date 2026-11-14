@@ -1,8 +1,8 @@
 """Remote control support for Apple TV."""
 
 import asyncio
-
-from haphilipsjs.typing import SystemType
+from collections.abc import Iterable
+from typing import Any, override
 
 from homeassistant.components.remote import (
     ATTR_DELAY_SECS,
@@ -10,93 +10,87 @@ from homeassistant.components.remote import (
     DEFAULT_DELAY_SECS,
     RemoteEntity,
 )
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.trigger import PluggableAction
 
-from . import LOGGER, PhilipsTVDataUpdateCoordinator
-from .const import CONF_SYSTEM, DOMAIN
+from . import LOGGER
+from .const import TV_STATE_OFF, TV_STATE_ON
+from .coordinator import PhilipsTVConfigEntry, PhilipsTVDataUpdateCoordinator
+from .entity import PhilipsJsEntity
+from .helpers import async_get_turn_on_trigger
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: PhilipsTVConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
     """Set up the configuration entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities(
-        [
-            PhilipsTVRemote(
-                coordinator,
-                config_entry.data[CONF_SYSTEM],
-                config_entry.unique_id,
-            )
-        ]
-    )
+    coordinator = config_entry.runtime_data
+    async_add_entities([PhilipsTVRemote(coordinator)])
 
 
-class PhilipsTVRemote(RemoteEntity):
+class PhilipsTVRemote(PhilipsJsEntity, RemoteEntity):
     """Device that sends commands."""
+
+    _attr_translation_key = "remote"
 
     def __init__(
         self,
         coordinator: PhilipsTVDataUpdateCoordinator,
-        system: SystemType,
-        unique_id: str,
     ) -> None:
         """Initialize the Philips TV."""
+        super().__init__(coordinator)
         self._tv = coordinator.api
-        self._coordinator = coordinator
-        self._system = system
-        self._unique_id = unique_id
+        self._attr_unique_id = coordinator.unique_id
+        self._turn_on = PluggableAction(self.async_write_ha_state)
+
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Handle being added to hass."""
+        await super().async_added_to_hass()
+
+        if (entry := self.registry_entry) and entry.device_id:
+            self.async_on_remove(
+                self._turn_on.async_register(
+                    self.hass, async_get_turn_on_trigger(entry.device_id)
+                )
+            )
 
     @property
-    def name(self):
-        """Return the device name."""
-        return self._system["name"]
-
-    @property
-    def is_on(self):
+    @override
+    def is_on(self) -> bool | None:
         """Return true if device is on."""
-        return bool(
-            self._tv.on and (self._tv.powerstate == "On" or self._tv.powerstate is None)
-        )
+        if not self._tv.on:
+            return False
+        if self._tv.powerstate is not None:
+            return self._tv.powerstate == TV_STATE_ON
+        return self._tv.screenstate != TV_STATE_OFF
 
-    @property
-    def should_poll(self):
-        """No polling needed for Apple TV."""
-        return False
-
-    @property
-    def unique_id(self):
-        """Return unique identifier if known."""
-        return self._unique_id
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return a device description for device registry."""
-        return DeviceInfo(
-            identifiers={
-                (DOMAIN, self._unique_id),
-            },
-            manufacturer="Philips",
-            model=self._system.get("model"),
-            name=self._system["name"],
-            sw_version=self._system.get("softwareversion"),
-        )
-
-    async def async_turn_on(self, **kwargs):
+    @override
+    async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the device on."""
         if self._tv.on and self._tv.powerstate:
             await self._tv.setPowerState("On")
         else:
-            await self._coordinator.turn_on.async_run(self.hass, self._context)
+            await self._turn_on.async_run(self.hass, self._context)
         self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs):
+    @override
+    async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the device off."""
-        if self._tv.on:
-            await self._tv.sendKey("Standby")
-            self.async_write_ha_state()
-        else:
+        if not self.is_on:
             LOGGER.debug("Tv was already turned off")
+            return
+        if self._tv.powerstate:
+            await self._tv.setPowerState("Standby")
+        else:
+            await self._tv.sendKey("Standby")
+        self.async_write_ha_state()
 
-    async def async_send_command(self, command, **kwargs):
+    @override
+    async def async_send_command(self, command: Iterable[str], **kwargs: Any) -> None:
         """Send a command to one device."""
         num_repeats = kwargs[ATTR_NUM_REPEATS]
         delay = kwargs.get(ATTR_DELAY_SECS, DEFAULT_DELAY_SECS)

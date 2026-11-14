@@ -1,99 +1,34 @@
 """Support for scanning a network with nmap."""
-from __future__ import annotations
 
-from collections.abc import Callable
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, override
 
-import voluptuous as vol
-
-from homeassistant.components.device_tracker import (
-    DOMAIN as DEVICE_TRACKER_DOMAIN,
-    PLATFORM_SCHEMA as DEVICE_TRACKER_PLATFORM_SCHEMA,
-    SOURCE_TYPE_ROUTER,
-)
-from homeassistant.components.device_tracker.config_entry import ScannerEntity
-from homeassistant.components.device_tracker.const import (
-    CONF_CONSIDER_HOME,
-    CONF_SCAN_INTERVAL,
-    DEFAULT_CONSIDER_HOME,
-)
-from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
-from homeassistant.const import CONF_EXCLUDE, CONF_HOSTS
+from homeassistant.components.device_tracker import ScannerEntity
 from homeassistant.core import HomeAssistant, callback
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import NmapDevice, NmapDeviceScanner, short_hostname, signal_device_update
-from .const import (
-    CONF_HOME_INTERVAL,
-    CONF_OPTIONS,
-    DEFAULT_OPTIONS,
-    DOMAIN,
-    TRACKER_SCAN_INTERVAL,
+from . import (
+    NmapDevice,
+    NmapDeviceScanner,
+    NmapTrackerConfigEntry,
+    human_readable_name,
+    short_hostname,
+    signal_device_update,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-PLATFORM_SCHEMA = DEVICE_TRACKER_PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_HOSTS): cv.ensure_list,
-        vol.Required(CONF_HOME_INTERVAL, default=0): cv.positive_int,
-        vol.Required(
-            CONF_CONSIDER_HOME, default=DEFAULT_CONSIDER_HOME.total_seconds()
-        ): cv.time_period,
-        vol.Optional(CONF_EXCLUDE, default=[]): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional(CONF_OPTIONS, default=DEFAULT_OPTIONS): cv.string,
-    }
-)
-
-
-async def async_get_scanner(hass: HomeAssistant, config: ConfigType) -> None:
-    """Validate the configuration and return a Nmap scanner."""
-    validated_config = config[DEVICE_TRACKER_DOMAIN]
-
-    if CONF_SCAN_INTERVAL in validated_config:
-        scan_interval = validated_config[CONF_SCAN_INTERVAL].total_seconds()
-    else:
-        scan_interval = TRACKER_SCAN_INTERVAL
-
-    if CONF_CONSIDER_HOME in validated_config:
-        consider_home = validated_config[CONF_CONSIDER_HOME].total_seconds()
-    else:
-        consider_home = DEFAULT_CONSIDER_HOME.total_seconds()
-
-    import_config = {
-        CONF_HOSTS: ",".join(validated_config[CONF_HOSTS]),
-        CONF_HOME_INTERVAL: validated_config[CONF_HOME_INTERVAL],
-        CONF_CONSIDER_HOME: consider_home,
-        CONF_EXCLUDE: ",".join(validated_config[CONF_EXCLUDE]),
-        CONF_OPTIONS: validated_config[CONF_OPTIONS],
-        CONF_SCAN_INTERVAL: scan_interval,
-    }
-
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={"source": SOURCE_IMPORT},
-            data=import_config,
-        )
-    )
-
-    _LOGGER.warning(
-        "Your Nmap Tracker configuration has been imported into the UI, "
-        "please remove it from configuration.yaml. "
-    )
-
-
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: Callable
+    hass: HomeAssistant,
+    entry: NmapTrackerConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up device tracker for Nmap Tracker component."""
-    nmap_tracker = hass.data[DOMAIN][entry.entry_id]
+    nmap_tracker = entry.runtime_data
 
     @callback
     def device_new(mac_address):
@@ -118,6 +53,9 @@ async def async_setup_entry(
 class NmapTrackerEntity(ScannerEntity):
     """An Nmap Tracker entity."""
 
+    _attr_should_poll = False
+    _attr_translation_key = "device_tracker"
+
     def __init__(
         self, nmap_tracker: NmapDeviceScanner, mac_address: str, active: bool
     ) -> None:
@@ -133,60 +71,68 @@ class NmapTrackerEntity(ScannerEntity):
         return self._tracked[self._mac_address]
 
     @property
+    def _known_device_name(self) -> str | None:
+        """Return the name of the tracked device, unless it is a fallback."""
+        device = self._device
+        # A device restored from the registry has no address, its name was restored
+        if device.ipv4 is None:
+            return device.name
+        # A scan without a hostname reports the IP address as hostname
+        if device.hostname and device.hostname != device.ipv4:
+            return device.name
+        return None
+
+    @override
+    async def async_prepare_to_add_to_hass(self) -> None:
+        """Describe the device before it is created or updated."""
+        if TYPE_CHECKING:
+            assert self.platform.config_entry is not None
+        connections = {(dr.CONNECTION_NETWORK_MAC, self._mac_address)}
+        if (name := self._known_device_name) is None and (
+            devices := dr.async_get(self.hass).async_get_devices(
+                connections=connections,
+                config_entry_id=self.platform.config_entry.entry_id,
+            )
+        ):
+            name = devices[0].name
+        if name is None:
+            name = human_readable_name(
+                "", self._device.manufacturer, self._mac_address.upper()
+            )
+        self._attr_device_info = DeviceInfo(connections=connections, name=name)
+        await super().async_prepare_to_add_to_hass()
+
+    @property
+    @override
     def is_connected(self) -> bool:
         """Return device status."""
         return self._active
 
     @property
-    def name(self) -> str:
-        """Return device name."""
-        return self._device.name
-
-    @property
+    @override
     def unique_id(self) -> str:
         """Return device unique id."""
         return self._mac_address
 
     @property
+    @override
     def ip_address(self) -> str:
         """Return the primary ip address of the device."""
         return self._device.ipv4
 
     @property
+    @override
     def mac_address(self) -> str:
         """Return the mac address of the device."""
         return self._mac_address
 
     @property
+    @override
     def hostname(self) -> str | None:
         """Return hostname of the device."""
         if not self._device.hostname:
             return None
         return short_hostname(self._device.hostname)
-
-    @property
-    def source_type(self) -> str:
-        """Return tracker source type."""
-        return SOURCE_TYPE_ROUTER
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return the device information."""
-        return DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, self._mac_address)},
-            default_manufacturer=self._device.manufacturer,
-            default_name=self.name,
-        )
-
-    @property
-    def should_poll(self) -> bool:
-        """No polling needed."""
-        return False
-
-    @property
-    def icon(self) -> str:
-        """Return device icon."""
-        return "mdi:lan-connect" if self._active else "mdi:lan-disconnect"
 
     @callback
     def async_process_update(self, online: bool) -> None:
@@ -194,6 +140,7 @@ class NmapTrackerEntity(ScannerEntity):
         self._active = online
 
     @property
+    @override
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the attributes."""
         return {
@@ -207,8 +154,17 @@ class NmapTrackerEntity(ScannerEntity):
     def async_on_demand_update(self, online: bool) -> None:
         """Update state."""
         self.async_process_update(online)
+        # Hostname lookups may fail transiently, so a fallback name is not applied
+        if (
+            online
+            and (name := self._known_device_name)
+            and (device_entry := self.device_entry)
+            and device_entry.name != name
+        ):
+            dr.async_get(self.hass).async_update_device(device_entry.id, name=name)
         self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Register state update callback."""
         self.async_on_remove(

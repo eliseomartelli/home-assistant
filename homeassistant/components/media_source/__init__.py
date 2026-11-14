@@ -1,29 +1,69 @@
 """The media_source integration."""
-from __future__ import annotations
 
-from datetime import timedelta
-from typing import Any
-from urllib.parse import quote
-
-import voluptuous as vol
+from typing import Protocol
 
 from homeassistant.components import websocket_api
-from homeassistant.components.http.auth import async_sign_path
-from homeassistant.components.media_player.const import ATTR_MEDIA_CONTENT_ID
-from homeassistant.components.media_player.errors import BrowseError
-from homeassistant.components.websocket_api import ActiveConnection
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.integration_platform import (
-    async_process_integration_platforms,
-)
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.integration_platform import LazyIntegrationPlatforms
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.loader import bind_hass
 
-from . import local_source, models
-from .const import DOMAIN, URI_SCHEME, URI_SCHEME_REGEX
-from .error import Unresolvable
+from . import http, local_source
+from .const import (
+    DATA_LOCAL_SOURCE,
+    DATA_MEDIA_SOURCE_PLATFORMS,
+    DOMAIN,
+    MEDIA_CLASS_MAP,
+    MEDIA_MIME_TYPES,
+    URI_SCHEME,
+    URI_SCHEME_REGEX,
+)
+from .error import MediaSourceError, Unresolvable
+from .helper import (
+    async_browse_media,
+    async_get_media_image,
+    async_resolve_media,
+    async_search_media,
+)
+from .models import (
+    BrowseMediaSource,
+    MediaImage,
+    MediaSource,
+    MediaSourceItem,
+    PlayMedia,
+    RootBrowseMediaSource,
+)
 
-DEFAULT_EXPIRY_TIME = 3600 * 24
+__all__ = [
+    "DOMAIN",
+    "MEDIA_CLASS_MAP",
+    "MEDIA_MIME_TYPES",
+    "URI_SCHEME",
+    "BrowseMediaSource",
+    "MediaImage",
+    "MediaSource",
+    "MediaSourceError",
+    "MediaSourceItem",
+    "PlayMedia",
+    "RootBrowseMediaSource",
+    "Unresolvable",
+    "async_browse_media",
+    "async_get_media_image",
+    "async_resolve_media",
+    "async_search_media",
+    "generate_media_source_id",
+    "is_media_source_id",
+]
+
+
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
+
+
+class MediaSourceProtocol(Protocol):
+    """Define the format of media_source platforms."""
+
+    async def async_get_media_source(self, hass: HomeAssistant) -> MediaSource:
+        """Set up media source."""
 
 
 def is_media_source_id(media_content_id: str) -> bool:
@@ -33,7 +73,7 @@ def is_media_source_id(media_content_id: str) -> bool:
 
 def generate_media_source_id(domain: str, identifier: str) -> str:
     """Generate a media source ID."""
-    uri = f"{URI_SCHEME}{domain or ''}"
+    uri = f"{URI_SCHEME}{domain}"
     if identifier:
         uri += f"/{identifier}"
     return uri
@@ -41,100 +81,25 @@ def generate_media_source_id(domain: str, identifier: str) -> str:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the media_source component."""
-    hass.data[DOMAIN] = {}
-    hass.components.websocket_api.async_register_command(websocket_browse_media)
-    hass.components.websocket_api.async_register_command(websocket_resolve_media)
-    hass.components.frontend.async_register_built_in_panel(
-        "media-browser", "media_browser", "hass:play-box-multiple"
-    )
-    local_source.async_setup(hass)
-    await async_process_integration_platforms(
+    hass.data[DATA_MEDIA_SOURCE_PLATFORMS] = LazyIntegrationPlatforms[MediaSource](
         hass, DOMAIN, _process_media_source_platform
     )
+    http.async_setup(hass)
+
+    # Local sources support
+    source = await local_source.async_get_media_source(hass)
+    hass.data[DATA_LOCAL_SOURCE] = source
+    hass.http.register_view(local_source.LocalMediaView(hass, source))
+    hass.http.register_view(local_source.UploadMediaView)
+    websocket_api.async_register_command(hass, local_source.websocket_remove_media)
+
     return True
 
 
 async def _process_media_source_platform(
-    hass: HomeAssistant, domain: str, platform: Any
-) -> None:
+    hass: HomeAssistant,
+    domain: str,
+    platform: MediaSourceProtocol,
+) -> MediaSource:
     """Process a media source platform."""
-    hass.data[DOMAIN][domain] = await platform.async_get_media_source(hass)
-
-
-@callback
-def _get_media_item(
-    hass: HomeAssistant, media_content_id: str | None
-) -> models.MediaSourceItem:
-    """Return media item."""
-    if media_content_id:
-        return models.MediaSourceItem.from_uri(hass, media_content_id)
-
-    # We default to our own domain if its only one registered
-    domain = None if len(hass.data[DOMAIN]) > 1 else DOMAIN
-    return models.MediaSourceItem(hass, domain, "")
-
-
-@bind_hass
-async def async_browse_media(
-    hass: HomeAssistant, media_content_id: str
-) -> models.BrowseMediaSource:
-    """Return media player browse media results."""
-    return await _get_media_item(hass, media_content_id).async_browse()
-
-
-@bind_hass
-async def async_resolve_media(
-    hass: HomeAssistant, media_content_id: str
-) -> models.PlayMedia:
-    """Get info to play media."""
-    return await _get_media_item(hass, media_content_id).async_resolve()
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "media_source/browse_media",
-        vol.Optional(ATTR_MEDIA_CONTENT_ID, default=""): str,
-    }
-)
-@websocket_api.async_response
-async def websocket_browse_media(
-    hass: HomeAssistant, connection: ActiveConnection, msg: dict
-) -> None:
-    """Browse available media."""
-    try:
-        media = await async_browse_media(hass, msg.get("media_content_id", ""))
-        connection.send_result(
-            msg["id"],
-            media.as_dict(),
-        )
-    except BrowseError as err:
-        connection.send_error(msg["id"], "browse_media_failed", str(err))
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "media_source/resolve_media",
-        vol.Required(ATTR_MEDIA_CONTENT_ID): str,
-        vol.Optional("expires", default=DEFAULT_EXPIRY_TIME): int,
-    }
-)
-@websocket_api.async_response
-async def websocket_resolve_media(
-    hass: HomeAssistant, connection: ActiveConnection, msg: dict
-) -> None:
-    """Resolve media."""
-    try:
-        media = await async_resolve_media(hass, msg["media_content_id"])
-        url = media.url
-    except Unresolvable as err:
-        connection.send_error(msg["id"], "resolve_media_failed", str(err))
-    else:
-        if url[0] == "/":
-            url = async_sign_path(
-                hass,
-                connection.refresh_token_id,
-                quote(url),
-                timedelta(seconds=msg["expires"]),
-            )
-
-        connection.send_result(msg["id"], {"url": url, "mime_type": media.mime_type})
+    return await platform.async_get_media_source(hass)

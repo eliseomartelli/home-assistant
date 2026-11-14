@@ -1,28 +1,28 @@
 """Constants for the LCN component."""
+
 from itertools import product
 
-from homeassistant.const import (
-    DEGREE,
-    ELECTRIC_POTENTIAL_VOLT,
-    PERCENTAGE,
-    TEMP_CELSIUS,
-    TEMP_FAHRENHEIT,
-    TEMP_KELVIN,
-)
+from homeassistant.const import Platform
 
-PLATFORMS = ["binary_sensor", "climate", "cover", "light", "scene", "sensor", "switch"]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.CLIMATE,
+    Platform.COVER,
+    Platform.LIGHT,
+    Platform.SCENE,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 DOMAIN = "lcn"
-DATA_LCN = "lcn"
 DEFAULT_NAME = "pchk"
 
-CONNECTION = "connection"
 CONF_HARDWARE_SERIAL = "hardware_serial"
 CONF_SOFTWARE_SERIAL = "software_serial"
 CONF_HARDWARE_TYPE = "hardware_type"
-CONF_RESOURCE = "resource"
 CONF_DOMAIN_DATA = "domain_data"
 
+CONF_ACKNOWLEDGE = "acknowledge"
 CONF_CONNECTIONS = "connections"
 CONF_SK_NUM_TRIES = "sk_num_tries"
 CONF_OUTPUT = "output"
@@ -31,18 +31,9 @@ CONF_DIMMABLE = "dimmable"
 CONF_TRANSITION = "transition"
 CONF_MOTOR = "motor"
 CONF_LOCKABLE = "lockable"
-CONF_VARIABLE = "variable"
-CONF_VALUE = "value"
-CONF_RELVARREF = "value_reference"
+CONF_TARGET_VALUE_LOCKED = "target_value_locked"
 CONF_SETPOINT = "setpoint"
-CONF_LED = "led"
-CONF_KEYS = "keys"
-CONF_TIME = "time"
-CONF_TIME_UNIT = "time_unit"
-CONF_TABLE = "table"
-CONF_ROW = "row"
-CONF_TEXT = "text"
-CONF_PCK = "pck"
+CONF_LOCK_TIME = "lock_time"
 CONF_CLIMATES = "climates"
 CONF_MAX_TEMP = "max_temp"
 CONF_MIN_TEMP = "min_temp"
@@ -50,6 +41,7 @@ CONF_SCENES = "scenes"
 CONF_REGISTER = "register"
 CONF_OUTPUTS = "outputs"
 CONF_REVERSE_TIME = "reverse_time"
+CONF_POSITIONING_MODE = "positioning_mode"
 
 DIM_MODES = ["STEPS50", "STEPS200"]
 
@@ -157,9 +149,9 @@ VAR_UNITS = [
     "",
     "LCN",
     "NATIVE",
-    TEMP_CELSIUS,
-    TEMP_KELVIN,
-    TEMP_FAHRENHEIT,
+    "°C",
+    "K",
+    "°F",
     "LUX_T",
     "LX_T",
     "LUX_I",
@@ -167,21 +159,50 @@ VAR_UNITS = [
     "LX",
     "M/S",
     "METERPERSECOND",
-    PERCENTAGE,
+    "%",
     "PERCENT",
     "PPM",
     "VOLT",
-    ELECTRIC_POTENTIAL_VOLT,
+    "V",
     "AMPERE",
     "AMP",
     "A",
     "DEGREE",
-    DEGREE,
+    "°",
 ]
 
 RELVARREF = ["CURRENT", "PROG"]
 
 SENDKEYCOMMANDS = ["HIT", "MAKE", "BREAK", "DONTSEND"]
+
+SENDKEYS = [
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7",
+    "A8",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6",
+    "B7",
+    "B8",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+]
+
+KEY_ACTIONS = ["HIT", "MAKE", "BREAK"]
 
 TIME_UNITS = [
     "SECONDS",
@@ -200,4 +221,6 @@ TIME_UNITS = [
     "D",
 ]
 
-MOTOR_REVERSE_TIME = ["RT70", "RT600", "RT1200"]
+MOTOR_REVERSE_TIMES = ["RT70", "RT600", "RT1200"]
+
+MOTOR_POSITIONING_MODES = ["NONE", "BS4", "MODULE"]

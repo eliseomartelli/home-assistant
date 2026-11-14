@@ -1,56 +1,72 @@
 """Support for Tuya Fan."""
-from __future__ import annotations
 
-import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, override
 
-from tuya_iot import TuyaDevice, TuyaDeviceManager
+from tuya_device_handlers.definition.fan import FanDefinition, get_default_definition
+from tuya_device_handlers.helpers.homeassistant import TuyaFanDirection
+from tuya_sharing import CustomerDevice, Manager
 
 from homeassistant.components.fan import (
     DIRECTION_FORWARD,
     DIRECTION_REVERSE,
-    SUPPORT_DIRECTION,
-    SUPPORT_OSCILLATE,
-    SUPPORT_PRESET_MODE,
-    SUPPORT_SET_SPEED,
     FanEntity,
+    FanEntityDescription,
+    FanEntityFeature,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util.percentage import (
-    ordered_list_item_to_percentage,
-    percentage_to_ordered_list_item,
-)
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from . import HomeAssistantTuyaData
-from .base import TuyaEntity
-from .const import DOMAIN, TUYA_DISCOVERY_NEW, DPCode
+from .const import TUYA_DISCOVERY_NEW, DeviceCategory
+from .coordinator import TuyaConfigEntry
+from .entity import TuyaEntity, TuyaEntityDescription
 
-TUYA_SUPPORT_TYPE = {
-    "fs",  # Fan
-    "kj",  # Air Purifier
+
+@dataclass(frozen=True)
+class TuyaFanEntityDescription(TuyaEntityDescription, FanEntityDescription):
+    """Describes a Tuya fan entity."""
+
+
+FANS: dict[DeviceCategory, TuyaFanEntityDescription] = {
+    DeviceCategory.CS: TuyaFanEntityDescription(key=""),
+    DeviceCategory.FS: TuyaFanEntityDescription(key=""),
+    DeviceCategory.FSD: TuyaFanEntityDescription(key=""),
+    DeviceCategory.FSKG: TuyaFanEntityDescription(key=""),
+    DeviceCategory.KJ: TuyaFanEntityDescription(key=""),
+    DeviceCategory.KS: TuyaFanEntityDescription(key=""),
+}
+
+_TUYA_TO_HA_DIRECTION_MAPPINGS = {
+    TuyaFanDirection.FORWARD: DIRECTION_FORWARD,
+    TuyaFanDirection.REVERSE: DIRECTION_REVERSE,
+}
+_HA_TO_TUYA_DIRECTION_MAPPINGS = {
+    v: k for k, v in _TUYA_TO_HA_DIRECTION_MAPPINGS.items()
 }
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
-):
+    hass: HomeAssistant,
+    entry: TuyaConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
     """Set up tuya fan dynamically through tuya discovery."""
-    hass_data: HomeAssistantTuyaData = hass.data[DOMAIN][entry.entry_id]
+    manager = entry.runtime_data.manager
 
     @callback
     def async_discover_device(device_ids: list[str]) -> None:
         """Discover and add a discovered tuya fan."""
         entities: list[TuyaFanEntity] = []
         for device_id in device_ids:
-            device = hass_data.device_manager.device_map[device_id]
-            if device and device.category in TUYA_SUPPORT_TYPE:
-                entities.append(TuyaFanEntity(device, hass_data.device_manager))
+            device = manager.device_map[device_id]
+            if (description := FANS.get(device.category)) and (
+                definition := get_default_definition(device)
+            ):
+                entities.append(TuyaFanEntity(device, manager, description, definition))
         async_add_entities(entities)
 
-    async_discover_device([*hass_data.device_manager.device_map])
+    async_discover_device([*manager.device_map])
 
     entry.async_on_unload(
         async_dispatcher_connect(hass, TUYA_DISCOVERY_NEW, async_discover_device)
@@ -60,155 +76,126 @@ async def async_setup_entry(
 class TuyaFanEntity(TuyaEntity, FanEntity):
     """Tuya Fan Device."""
 
-    def __init__(self, device: TuyaDevice, device_manager: TuyaDeviceManager) -> None:
-        """Init Tuya Fan Device."""
-        super().__init__(device, device_manager)
+    _attr_name = None
 
-        self.ha_preset_modes = []
-        if DPCode.MODE in self.device.function:
-            self.ha_preset_modes = json.loads(
-                self.device.function[DPCode.MODE].values
-            ).get("range", [])
-
-        # Air purifier fan can be controlled either via the ranged values or via the enum.
-        # We will always prefer the enumeration if available
-        #   Enum is used for e.g. MEES SmartHIMOX-H06
-        #   Range is used for e.g. Concept CA3000
-        self.air_purifier_speed_range_len = 0
-        self.air_purifier_speed_range_enum = []
-        if self.device.category == "kj" and (
-            DPCode.FAN_SPEED_ENUM in self.device.function
-            or DPCode.SPEED in self.device.function
-        ):
-            if DPCode.FAN_SPEED_ENUM in self.device.function:
-                self.dp_code_speed_enum = DPCode.FAN_SPEED_ENUM
-            else:
-                self.dp_code_speed_enum = DPCode.SPEED
-
-            data = json.loads(self.device.function[self.dp_code_speed_enum].values).get(
-                "range"
-            )
-            if data:
-                self.air_purifier_speed_range_len = len(data)
-                self.air_purifier_speed_range_enum = data
-
-    def set_preset_mode(self, preset_mode: str) -> None:
-        """Set the preset mode of the fan."""
-        self._send_command([{"code": DPCode.MODE, "value": preset_mode}])
-
-    def set_direction(self, direction: str) -> None:
-        """Set the direction of the fan."""
-        self._send_command([{"code": DPCode.FAN_DIRECTION, "value": direction}])
-
-    def set_percentage(self, percentage: int) -> None:
-        """Set the speed of the fan, as a percentage."""
-        if self.device.category == "kj":
-            value_in_range = percentage_to_ordered_list_item(
-                self.air_purifier_speed_range_enum, percentage
-            )
-            self._send_command(
-                [
-                    {
-                        "code": self.dp_code_speed_enum,
-                        "value": value_in_range,
-                    }
-                ]
-            )
-        else:
-            self._send_command(
-                [{"code": DPCode.FAN_SPEED_PERCENT, "value": percentage}]
-            )
-
-    def turn_off(self, **kwargs: Any) -> None:
-        """Turn the fan off."""
-        self._send_command([{"code": DPCode.SWITCH, "value": False}])
-
-    def turn_on(
+    def __init__(
         self,
-        speed: str = None,
-        percentage: int = None,
-        preset_mode: str = None,
+        device: CustomerDevice,
+        device_manager: Manager,
+        description: TuyaFanEntityDescription,
+        definition: FanDefinition,
+    ) -> None:
+        """Init Tuya Fan Device."""
+        super().__init__(device, device_manager, description)
+        self._direction_wrapper = definition.direction_wrapper
+        self._mode_wrapper = definition.mode_wrapper
+        self._oscillate_wrapper = definition.oscillate_wrapper
+        self._speed_wrapper = definition.speed_wrapper
+        self._switch_wrapper = definition.switch_wrapper
+
+        if definition.mode_wrapper:
+            self._attr_supported_features |= FanEntityFeature.PRESET_MODE
+            self._attr_preset_modes = definition.mode_wrapper.options
+
+        if definition.speed_wrapper:
+            self._attr_supported_features |= FanEntityFeature.SET_SPEED
+            # if speed is from an enum, set speed count from options
+            # else keep entity default 100
+            if hasattr(definition.speed_wrapper, "options"):
+                self._attr_speed_count = len(definition.speed_wrapper.options)
+
+        if definition.oscillate_wrapper:
+            self._attr_supported_features |= FanEntityFeature.OSCILLATE
+
+        if definition.direction_wrapper:
+            self._attr_supported_features |= FanEntityFeature.DIRECTION
+        if definition.switch_wrapper:
+            self._attr_supported_features |= (
+                FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
+            )
+
+    @override
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Set the preset mode of the fan."""
+        await self._async_send_wrapper_updates(self._mode_wrapper, preset_mode)
+
+    @override
+    async def async_set_direction(self, direction: str) -> None:
+        """Set the direction of the fan."""
+        if tuya_value := _HA_TO_TUYA_DIRECTION_MAPPINGS.get(direction):
+            await self._async_send_wrapper_updates(self._direction_wrapper, tuya_value)
+
+    @override
+    async def async_set_percentage(self, percentage: int) -> None:
+        """Set the speed of the fan, as a percentage."""
+        # The speed wrappers have no off position, 0% has to hit the switch
+        if percentage == 0 and self._switch_wrapper is not None:
+            await self.async_turn_off()
+            return
+
+        await self._async_send_wrapper_updates(self._speed_wrapper, percentage)
+
+    @override
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the fan off."""
+        await self._async_send_wrapper_updates(self._switch_wrapper, False)
+
+    @override
+    async def async_turn_on(
+        self,
+        percentage: int | None = None,
+        preset_mode: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Turn on the fan."""
-        self._send_command([{"code": DPCode.SWITCH, "value": True}])
+        if self._switch_wrapper is None:
+            return
 
-    def oscillate(self, oscillating: bool) -> None:
-        """Oscillate the fan."""
-        self._send_command([{"code": DPCode.SWITCH_HORIZONTAL, "value": oscillating}])
+        commands = self._switch_wrapper.get_update_commands(self.device, True)
 
-    @property
-    def is_on(self) -> bool:
-        """Return true if fan is on."""
-        return self.device.status.get(DPCode.SWITCH, False)
-
-    @property
-    def current_direction(self) -> str:
-        """Return the current direction of the fan."""
-        if self.device.status[DPCode.FAN_DIRECTION]:
-            return DIRECTION_FORWARD
-        return DIRECTION_REVERSE
-
-    @property
-    def oscillating(self) -> bool:
-        """Return true if the fan is oscillating."""
-        return self.device.status.get(DPCode.SWITCH_HORIZONTAL, False)
-
-    @property
-    def preset_modes(self) -> list[str]:
-        """Return the list of available preset_modes."""
-        return self.ha_preset_modes
-
-    @property
-    def preset_mode(self) -> str:
-        """Return the current preset_mode."""
-        return self.device.status[DPCode.MODE]
-
-    @property
-    def percentage(self) -> int | None:
-        """Return the current speed."""
-        if not self.is_on:
-            return 0
-
-        if (
-            self.device.category == "kj"
-            and self.air_purifier_speed_range_len > 1
-            and not self.air_purifier_speed_range_enum
-            and DPCode.FAN_SPEED_ENUM in self.device.status
-        ):
-            # if air-purifier speed enumeration is supported we will prefer it.
-            return ordered_list_item_to_percentage(
-                self.air_purifier_speed_range_enum,
-                self.device.status[DPCode.FAN_SPEED_ENUM],
+        if percentage is not None and self._speed_wrapper is not None:
+            commands.extend(
+                self._speed_wrapper.get_update_commands(self.device, percentage)
             )
 
-        # some type may not have the fan_speed_percent key
-        return self.device.status.get(DPCode.FAN_SPEED_PERCENT)
+        if preset_mode is not None and self._mode_wrapper:
+            commands.extend(
+                self._mode_wrapper.get_update_commands(self.device, preset_mode)
+            )
+        await self._async_send_commands(commands)
+
+    @override
+    async def async_oscillate(self, oscillating: bool) -> None:
+        """Oscillate the fan."""
+        await self._async_send_wrapper_updates(self._oscillate_wrapper, oscillating)
 
     @property
-    def speed_count(self) -> int:
-        """Return the number of speeds the fan supports."""
-        if self.device.category == "kj":
-            return self.air_purifier_speed_range_len
-        return super().speed_count
+    @override
+    def is_on(self) -> bool | None:
+        """Return true if fan is on."""
+        return self._read_wrapper(self._switch_wrapper)
 
     @property
-    def supported_features(self):
-        """Flag supported features."""
-        supports = 0
-        if DPCode.MODE in self.device.status:
-            supports |= SUPPORT_PRESET_MODE
-        if DPCode.FAN_SPEED_PERCENT in self.device.status:
-            supports |= SUPPORT_SET_SPEED
-        if DPCode.SWITCH_HORIZONTAL in self.device.status:
-            supports |= SUPPORT_OSCILLATE
-        if DPCode.FAN_DIRECTION in self.device.status:
-            supports |= SUPPORT_DIRECTION
+    @override
+    def current_direction(self) -> str | None:
+        """Return the current direction of the fan."""
+        tuya_value = self._read_wrapper(self._direction_wrapper)
+        return _TUYA_TO_HA_DIRECTION_MAPPINGS.get(tuya_value) if tuya_value else None
 
-        # Air Purifier specific
-        if (
-            DPCode.SPEED in self.device.status
-            or DPCode.FAN_SPEED_ENUM in self.device.status
-        ):
-            supports |= SUPPORT_SET_SPEED
-        return supports
+    @property
+    @override
+    def oscillating(self) -> bool | None:
+        """Return true if the fan is oscillating."""
+        return self._read_wrapper(self._oscillate_wrapper)
+
+    @property
+    @override
+    def preset_mode(self) -> str | None:
+        """Return the current preset_mode."""
+        return self._read_wrapper(self._mode_wrapper)
+
+    @property
+    @override
+    def percentage(self) -> int | None:
+        """Return the current speed."""
+        return self._read_wrapper(self._speed_wrapper)

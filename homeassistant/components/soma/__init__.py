@@ -1,101 +1,112 @@
 """Support for Soma Smartshades."""
 
+from dataclasses import dataclass
+from typing import Any
+
 from api.soma_api import SomaApi
-import voluptuous as vol
+import probatio
 
-from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.core import HomeAssistant
-import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
+from homeassistant.const import CONF_HOST, CONF_PORT, Platform
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import config_validation as cv, issue_registry as ir
+from homeassistant.helpers.typing import ConfigType
 
-from .const import API, DOMAIN, HOST, PORT
+from .const import DOMAIN, HOST, PORT
 
-DEVICES = "devices"
-
-CONFIG_SCHEMA = vol.Schema(
-    vol.All(
-        cv.deprecated(DOMAIN),
-        {
-            DOMAIN: vol.Schema(
-                {vol.Required(CONF_HOST): cv.string, vol.Required(CONF_PORT): cv.string}
-            )
-        },
-    ),
-    extra=vol.ALLOW_EXTRA,
+CONFIG_SCHEMA = probatio.Schema(
+    {
+        DOMAIN: probatio.Schema(
+            {
+                probatio.Required(CONF_HOST): cv.string,
+                probatio.Required(CONF_PORT): cv.string,
+            }
+        )
+    },
+    extra=probatio.ALLOW_EXTRA,
 )
 
-PLATFORMS = ["cover", "sensor"]
+INTEGRATION_TITLE = "Soma Connect"
 
 
-async def async_setup(hass, config):
+@dataclass
+class SomaData:
+    """Runtime data for the Soma integration."""
+
+    api: SomaApi
+    devices: list[dict[str, Any]]
+
+
+type SomaConfigEntry = ConfigEntry[SomaData]
+
+PLATFORMS = [Platform.COVER, Platform.SENSOR]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Soma component."""
     if DOMAIN not in config:
         return True
 
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN,
-            data=config[DOMAIN],
-            context={"source": config_entries.SOURCE_IMPORT},
-        )
+    hass.async_create_task(_async_import_yaml(hass, config[DOMAIN]))
+
+    return True
+
+
+async def _async_import_yaml(hass: HomeAssistant, import_data: dict[str, Any]) -> None:
+    """Import the YAML configuration and raise a deprecation issue."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_IMPORT},
+        data=import_data,
     )
 
-    return True
-
-
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Soma from a config entry."""
-    hass.data[DOMAIN] = {}
-    hass.data[DOMAIN][API] = SomaApi(entry.data[HOST], entry.data[PORT])
-    devices = await hass.async_add_executor_job(hass.data[DOMAIN][API].list_devices)
-    hass.data[DOMAIN][DEVICES] = devices["shades"]
-
-    hass.config_entries.async_setup_platforms(entry, PLATFORMS)
-
-    return True
-
-
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-
-
-class SomaEntity(Entity):
-    """Representation of a generic Soma device."""
-
-    def __init__(self, device, api):
-        """Initialize the Soma device."""
-        self.device = device
-        self.api = api
-        self.current_position = 50
-        self.battery_state = 0
-        self.is_available = True
-
-    @property
-    def available(self):
-        """Return true if the last API commands returned successfully."""
-        return self.is_available
-
-    @property
-    def unique_id(self):
-        """Return the unique id base on the id returned by pysoma API."""
-        return self.device["mac"]
-
-    @property
-    def name(self):
-        """Return the name of the device."""
-        return self.device["name"]
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device specific attributes.
-
-        Implemented by platform classes.
-        """
-        return DeviceInfo(
-            identifiers={(DOMAIN, self.unique_id)},
-            manufacturer="Wazombi Labs",
-            name=self.name,
+    if result["type"] is FlowResultType.ABORT and result["reason"] != "already_setup":
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"deprecated_yaml_import_issue_{result['reason']}",
+            breaks_in_ha_version="2027.6.0",
+            is_fixable=False,
+            issue_domain=DOMAIN,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=f"deprecated_yaml_import_issue_{result['reason']}",
+            translation_placeholders={
+                "domain": DOMAIN,
+                "integration_title": INTEGRATION_TITLE,
+            },
         )
+        return
+
+    ir.async_create_issue(
+        hass,
+        HOMEASSISTANT_DOMAIN,
+        f"deprecated_yaml_{DOMAIN}",
+        breaks_in_ha_version="2027.6.0",
+        is_fixable=False,
+        issue_domain=DOMAIN,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="deprecated_yaml",
+        translation_placeholders={
+            "domain": DOMAIN,
+            "integration_title": INTEGRATION_TITLE,
+        },
+    )
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: SomaConfigEntry) -> None:
+    """Set up Soma from a config entry."""
+
+    def _setup_api() -> tuple[SomaApi, dict[str, Any]]:
+        api = SomaApi(entry.data[HOST], entry.data[PORT])
+        return api, api.list_devices()
+
+    api, devices = await hass.async_add_executor_job(_setup_api)
+    entry.runtime_data = SomaData(api, devices["shades"])
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: SomaConfigEntry) -> None:
+    """Unload a config entry."""
+    await hass.config_entries.async_unload_platforms_or_raise(entry, PLATFORMS)

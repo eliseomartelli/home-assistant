@@ -1,0 +1,210 @@
+# serializer version: 1
+# name: test_entry_diagnostics
+  dict({
+    'appliances': dict({
+      'aircons': list([
+        dict({
+          'category': 'aircon',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+          }),
+        }),
+        dict({
+          'category': 'aircon',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+          }),
+        }),
+      ]),
+      'dryers': list([
+        dict({
+          'category': 'washer_dryer',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+          }),
+        }),
+      ]),
+      'microwaves': list([
+        dict({
+          'category': 'microwave',
+          'model_number': '12345',
+          'raw': dict({
+            'microwaveCavity': dict({
+              'cavityState': 'idle',
+              'doorStatus': 'closed',
+            }),
+            'temperatureUnit': 'C',
+          }),
+          'raw_info': dict({
+            'attributes': dict({
+              'Category': 'Cooking',
+              'Name': '4d6963726f77617665',
+              'Serial': '**REDACTED**',
+            }),
+            'defaultClientId': '**REDACTED**',
+            'thingArn': '**REDACTED**',
+            'thingId': '**REDACTED**',
+            'thingName': '**REDACTED**',
+            'thingTypeName': '12345',
+            'version': 1,
+          }),
+        }),
+      ]),
+      'ovens': list([
+        dict({
+          'category': 'oven',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+          }),
+        }),
+        dict({
+          'category': 'oven',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+          }),
+        }),
+      ]),
+      'refrigerators': list([
+        dict({
+          'category': 'refrigerator',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+          }),
+        }),
+      ]),
+      'unsupported': list([
+        dict({
+          'category': 'cooking',
+          'model_number': '12345',
+          'raw': dict({
+            'primaryCavity': dict({
+              'cavityState': 'idle',
+              'doorStatus': 'closed',
+            }),
+            'temperatureUnit': 'C',
+          }),
+          'raw_info': dict({
+            'attributes': dict({
+              'CapabilityPartNumber': 'W11788386',
+              'Category': 'Cooking',
+              'Name': '556e737570706f72746564206170706c69616e6365',
+              'Serial': '**REDACTED**',
+            }),
+            'defaultClientId': '**REDACTED**',
+            'thingArn': '**REDACTED**',
+            'thingId': '**REDACTED**',
+            'thingName': '**REDACTED**',
+            'thingTypeName': '12345',
+            'version': 1,
+          }),
+        }),
+      ]),
+      'washers': list([
+        dict({
+          'category': 'washer_dryer',
+          'model_number': '12345',
+          'raw': dict({
+            '_id': '**REDACTED**',
+            'attributes': dict({
+              'Cavity_OpSetHorzLouverSwing': dict({
+                'updateTime': 1626517992782,
+                'value': '1',
+              }),
+            }),
+          }),
+          'raw_info': dict({
+            'APPLIANCE_ID': '**REDACTED**',
+            'APPLIANCE_NAME': 'Washer',
+            'CATEGORY_NAME': 'FabricCare',
+            'DATA_MODEL_KEY': 'DDM_LAUNDRY_VMAX20_WHIRLPOOL_WASHER8_V2',
+            'DEVICE_ID': '**REDACTED**',
+            'LOCATION_ID': '**REDACTED**',
+            'MACHINE_ID': None,
+            'MODEL_NO': '12345',
+            'NEST_THERMOSTAT_ID': '**REDACTED**',
+            'SAID': '**REDACTED**',
+            'SERIAL': '**REDACTED**',
+            'STATUS': 'CLAIMED',
+          }),
+        }),
+      ]),
+    }),
+    'config_entry': dict({
+      'data': dict({
+        'brand': 'Whirlpool',
+        'password': '**REDACTED**',
+        'region': 'EU',
+        'username': '**REDACTED**',
+      }),
+      'disabled_by': None,
+      'discovery_keys': dict({
+      }),
+      'domain': 'whirlpool',
+      'minor_version': 1,
+      'options': dict({
+      }),
+      'pref_disable_new_entities': False,
+      'pref_disable_polling': False,
+      'source': 'user',
+      'subentries': list([
+      ]),
+      'title': 'Mock Title',
+      'unique_id': '**REDACTED**',
+      'version': 1,
+    }),
+  })
+# ---

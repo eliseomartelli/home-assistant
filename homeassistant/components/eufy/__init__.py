@@ -1,6 +1,7 @@
-"""Support for Eufy devices."""
+"""Support for EufyHome devices."""
+
 import lakeside
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import (
     CONF_ACCESS_TOKEN,
@@ -10,49 +11,53 @@ from homeassistant.const import (
     CONF_PASSWORD,
     CONF_TYPE,
     CONF_USERNAME,
+    Platform,
 )
-from homeassistant.helpers import discovery
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv, discovery
+from homeassistant.helpers.typing import ConfigType
 
 DOMAIN = "eufy"
 
-DEVICE_SCHEMA = vol.Schema(
+DEVICE_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_ADDRESS): cv.string,
-        vol.Required(CONF_ACCESS_TOKEN): cv.string,
-        vol.Required(CONF_TYPE): cv.string,
-        vol.Optional(CONF_NAME): cv.string,
+        probatio.Required(CONF_ADDRESS): cv.string,
+        probatio.Required(probatio.Secret(CONF_ACCESS_TOKEN)): cv.string,
+        probatio.Required(CONF_TYPE): cv.string,
+        probatio.Optional(CONF_NAME): cv.string,
     }
 )
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Optional(CONF_DEVICES, default=[]): vol.All(
-                    cv.ensure_list, [DEVICE_SCHEMA]
+                probatio.Optional(CONF_DEVICES, default=[]): probatio.All(
+                    probatio.EnsureList(), [DEVICE_SCHEMA]
                 ),
-                vol.Inclusive(CONF_USERNAME, "authentication"): cv.string,
-                vol.Inclusive(CONF_PASSWORD, "authentication"): cv.string,
+                probatio.Inclusive(CONF_USERNAME, "authentication"): cv.string,
+                probatio.Inclusive(
+                    probatio.Secret(CONF_PASSWORD), "authentication"
+                ): cv.string,
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
-EUFY_DISPATCH = {
-    "T1011": "light",
-    "T1012": "light",
-    "T1013": "light",
-    "T1201": "switch",
-    "T1202": "switch",
-    "T1203": "switch",
-    "T1211": "switch",
+PLATFORMS = {
+    "T1011": Platform.LIGHT,
+    "T1012": Platform.LIGHT,
+    "T1013": Platform.LIGHT,
+    "T1201": Platform.SWITCH,
+    "T1202": Platform.SWITCH,
+    "T1203": Platform.SWITCH,
+    "T1211": Platform.SWITCH,
 }
 
 
-def setup(hass, config):
-    """Set up Eufy devices."""
+def setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up EufyHome devices."""
 
     if CONF_USERNAME in config[DOMAIN] and CONF_PASSWORD in config[DOMAIN]:
         data = lakeside.get_devices(
@@ -60,19 +65,19 @@ def setup(hass, config):
         )
         for device in data:
             kind = device["type"]
-            if kind not in EUFY_DISPATCH:
+            if kind not in PLATFORMS:
                 continue
-            discovery.load_platform(hass, EUFY_DISPATCH[kind], DOMAIN, device, config)
+            discovery.load_platform(hass, PLATFORMS[kind], DOMAIN, device, config)
 
     for device_info in config[DOMAIN][CONF_DEVICES]:
         kind = device_info["type"]
-        if kind not in EUFY_DISPATCH:
+        if kind not in PLATFORMS:
             continue
         device = {}
         device["address"] = device_info["address"]
         device["code"] = device_info["access_token"]
         device["type"] = device_info["type"]
         device["name"] = device_info["name"]
-        discovery.load_platform(hass, EUFY_DISPATCH[kind], DOMAIN, device, config)
+        discovery.load_platform(hass, PLATFORMS[kind], DOMAIN, device, config)
 
     return True

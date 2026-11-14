@@ -1,35 +1,35 @@
 """The tests for the GeoNet NZ Volcano Feed integration."""
+
 from unittest.mock import AsyncMock, patch
 
+from freezegun import freeze_time
+from freezegun.api import FrozenDateTimeFactory
+from pytest_homeassistant.common import async_fire_time_changed
+
 from homeassistant.components import geonetnz_volcano
-from homeassistant.components.geo_location import ATTR_DISTANCE
 from homeassistant.components.geonetnz_volcano import DEFAULT_SCAN_INTERVAL
 from homeassistant.components.geonetnz_volcano.const import (
     ATTR_ACTIVITY,
+    ATTR_DISTANCE,
     ATTR_EXTERNAL_ID,
     ATTR_HAZARDS,
 )
 from homeassistant.const import (
-    ATTR_ATTRIBUTION,
-    ATTR_FRIENDLY_NAME,
-    ATTR_ICON,
-    ATTR_LATITUDE,
-    ATTR_LONGITUDE,
-    ATTR_UNIT_OF_MEASUREMENT,
     CONF_RADIUS,
     EVENT_HOMEASSISTANT_START,
+    EntityStateAttribute,
 )
+from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-import homeassistant.util.dt as dt_util
-from homeassistant.util.unit_system import IMPERIAL_SYSTEM
+from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_system import US_CUSTOMARY_SYSTEM
 
-from tests.common import async_fire_time_changed
-from tests.components.geonetnz_volcano import _generate_mock_feed_entry
+from . import _generate_mock_feed_entry
 
 CONFIG = {geonetnz_volcano.DOMAIN: {CONF_RADIUS: 200}}
 
 
-async def test_setup(hass, legacy_patchable_time):
+async def test_setup(hass: HomeAssistant) -> None:
     """Test the general setup of the integration."""
     # Set up some mock feed entries for this test.
     mock_entry_1 = _generate_mock_feed_entry(
@@ -48,9 +48,12 @@ async def test_setup(hass, legacy_patchable_time):
 
     # Patching 'utcnow' to gain more control over the timed update.
     utcnow = dt_util.utcnow()
-    with patch("homeassistant.util.dt.utcnow", return_value=utcnow), patch(
-        "aio_geojson_client.feed.GeoJsonFeed.update", new_callable=AsyncMock
-    ) as mock_feed_update:
+    with (
+        freeze_time(utcnow),
+        patch(
+            "aio_geojson_client.feed.GeoJsonFeed.update", new_callable=AsyncMock
+        ) as mock_feed_update,
+    ):
         mock_feed_update.return_value = "OK", [mock_entry_1, mock_entry_2, mock_entry_3]
         assert await async_setup_component(hass, geonetnz_volcano.DOMAIN, CONFIG)
         # Artificially trigger update and collect events.
@@ -69,35 +72,37 @@ async def test_setup(hass, legacy_patchable_time):
         assert state.name == "Volcano Title 1"
         assert int(state.state) == 1
         assert state.attributes[ATTR_EXTERNAL_ID] == "1234"
-        assert state.attributes[ATTR_LATITUDE] == 38.0
-        assert state.attributes[ATTR_LONGITUDE] == -3.0
+        assert state.attributes[EntityStateAttribute.LATITUDE] == 38.0
+        assert state.attributes[EntityStateAttribute.LONGITUDE] == -3.0
         assert state.attributes[ATTR_DISTANCE] == 15.5
-        assert state.attributes[ATTR_FRIENDLY_NAME] == "Volcano Title 1"
-        assert state.attributes[ATTR_ATTRIBUTION] == "Attribution 1"
+        assert state.attributes[EntityStateAttribute.FRIENDLY_NAME] == "Volcano Title 1"
+        assert state.attributes[EntityStateAttribute.ATTRIBUTION] == "Attribution 1"
         assert state.attributes[ATTR_ACTIVITY] == "Activity 1"
         assert state.attributes[ATTR_HAZARDS] == "Hazards 1"
-        assert state.attributes[ATTR_UNIT_OF_MEASUREMENT] == "alert level"
-        assert state.attributes[ATTR_ICON] == "mdi:image-filter-hdr"
+        assert (
+            state.attributes[EntityStateAttribute.UNIT_OF_MEASUREMENT] == "alert level"
+        )
+        assert state.attributes[EntityStateAttribute.ICON] == "mdi:image-filter-hdr"
 
         state = hass.states.get("sensor.volcano_title_2")
         assert state is not None
         assert state.name == "Volcano Title 2"
         assert int(state.state) == 0
         assert state.attributes[ATTR_EXTERNAL_ID] == "2345"
-        assert state.attributes[ATTR_LATITUDE] == 38.1
-        assert state.attributes[ATTR_LONGITUDE] == -3.1
+        assert state.attributes[EntityStateAttribute.LATITUDE] == 38.1
+        assert state.attributes[EntityStateAttribute.LONGITUDE] == -3.1
         assert state.attributes[ATTR_DISTANCE] == 20.5
-        assert state.attributes[ATTR_FRIENDLY_NAME] == "Volcano Title 2"
+        assert state.attributes[EntityStateAttribute.FRIENDLY_NAME] == "Volcano Title 2"
 
         state = hass.states.get("sensor.volcano_title_3")
         assert state is not None
         assert state.name == "Volcano Title 3"
         assert int(state.state) == 2
         assert state.attributes[ATTR_EXTERNAL_ID] == "3456"
-        assert state.attributes[ATTR_LATITUDE] == 38.2
-        assert state.attributes[ATTR_LONGITUDE] == -3.2
+        assert state.attributes[EntityStateAttribute.LATITUDE] == 38.2
+        assert state.attributes[EntityStateAttribute.LONGITUDE] == -3.2
         assert state.attributes[ATTR_DISTANCE] == 25.5
-        assert state.attributes[ATTR_FRIENDLY_NAME] == "Volcano Title 3"
+        assert state.attributes[EntityStateAttribute.FRIENDLY_NAME] == "Volcano Title 3"
 
         # Simulate an update - two existing, one new entry, one outdated entry
         mock_feed_update.return_value = "OK", [mock_entry_1, mock_entry_4, mock_entry_3]
@@ -145,19 +150,22 @@ async def test_setup(hass, legacy_patchable_time):
         )
 
 
-async def test_setup_imperial(hass):
+async def test_setup_imperial(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
     """Test the setup of the integration using imperial unit system."""
-    hass.config.units = IMPERIAL_SYSTEM
+    hass.config.units = US_CUSTOMARY_SYSTEM
     # Set up some mock feed entries for this test.
     mock_entry_1 = _generate_mock_feed_entry("1234", "Title 1", 1, 15.5, (38.0, -3.0))
 
     # Patching 'utcnow' to gain more control over the timed update.
-    utcnow = dt_util.utcnow()
-    with patch("homeassistant.util.dt.utcnow", return_value=utcnow), patch(
-        "aio_geojson_client.feed.GeoJsonFeed.update", new_callable=AsyncMock
-    ) as mock_feed_update, patch(
-        "aio_geojson_client.feed.GeoJsonFeed.__init__"
-    ) as mock_feed_init:
+    freezer.move_to(dt_util.utcnow())
+    with (
+        patch(
+            "aio_geojson_client.feed.GeoJsonFeed.update", new_callable=AsyncMock
+        ) as mock_feed_update,
+        patch("aio_geojson_client.feed.GeoJsonFeed.__init__") as mock_feed_init,
+    ):
         mock_feed_update.return_value = "OK", [mock_entry_1]
         assert await async_setup_component(hass, geonetnz_volcano.DOMAIN, CONFIG)
         # Artificially trigger update and collect events.
@@ -178,9 +186,11 @@ async def test_setup_imperial(hass):
         assert state.name == "Volcano Title 1"
         assert int(state.state) == 1
         assert state.attributes[ATTR_EXTERNAL_ID] == "1234"
-        assert state.attributes[ATTR_LATITUDE] == 38.0
-        assert state.attributes[ATTR_LONGITUDE] == -3.0
+        assert state.attributes[EntityStateAttribute.LATITUDE] == 38.0
+        assert state.attributes[EntityStateAttribute.LONGITUDE] == -3.0
         assert state.attributes[ATTR_DISTANCE] == 9.6
-        assert state.attributes[ATTR_FRIENDLY_NAME] == "Volcano Title 1"
-        assert state.attributes[ATTR_UNIT_OF_MEASUREMENT] == "alert level"
-        assert state.attributes[ATTR_ICON] == "mdi:image-filter-hdr"
+        assert state.attributes[EntityStateAttribute.FRIENDLY_NAME] == "Volcano Title 1"
+        assert (
+            state.attributes[EntityStateAttribute.UNIT_OF_MEASUREMENT] == "alert level"
+        )
+        assert state.attributes[EntityStateAttribute.ICON] == "mdi:image-filter-hdr"

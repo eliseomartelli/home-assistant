@@ -1,26 +1,33 @@
-"""This component provides support for Xiaomi Cameras."""
-from __future__ import annotations
+"""Component providing support for Xiaomi Cameras."""
 
 from ftplib import FTP, error_perm
 import logging
+from typing import override
 
 from haffmpeg.camera import CameraMjpeg
-import voluptuous as vol
+import probatio
 
 from homeassistant.components import ffmpeg
-from homeassistant.components.camera import PLATFORM_SCHEMA, Camera
-from homeassistant.components.ffmpeg import DATA_FFMPEG
+from homeassistant.components.camera import (
+    PLATFORM_SCHEMA as CAMERA_PLATFORM_SCHEMA,
+    Camera,
+)
+from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.const import (
     CONF_HOST,
+    CONF_MODEL,
     CONF_NAME,
     CONF_PASSWORD,
     CONF_PATH,
     CONF_PORT,
     CONF_USERNAME,
 )
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import TemplateError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_aiohttp_proxy_stream
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,26 +38,30 @@ DEFAULT_USERNAME = "root"
 DEFAULT_ARGUMENTS = "-pred 1"
 
 CONF_FFMPEG_ARGUMENTS = "ffmpeg_arguments"
-CONF_MODEL = "model"
 
 MODEL_YI = "yi"
 MODEL_XIAOFANG = "xiaofang"
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
+PLATFORM_SCHEMA = CAMERA_PLATFORM_SCHEMA.extend(
     {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_HOST): cv.template,
-        vol.Required(CONF_MODEL): vol.Any(MODEL_YI, MODEL_XIAOFANG),
-        vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-        vol.Optional(CONF_PATH, default=DEFAULT_PATH): cv.string,
-        vol.Optional(CONF_USERNAME, default=DEFAULT_USERNAME): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_FFMPEG_ARGUMENTS, default=DEFAULT_ARGUMENTS): cv.string,
+        probatio.Required(CONF_NAME): cv.string,
+        probatio.Required(CONF_HOST): cv.template,
+        probatio.Required(CONF_MODEL): probatio.Any(MODEL_YI, MODEL_XIAOFANG),
+        probatio.Optional(CONF_PORT, default=DEFAULT_PORT): probatio.Port(),
+        probatio.Optional(CONF_PATH, default=DEFAULT_PATH): cv.string,
+        probatio.Optional(CONF_USERNAME, default=DEFAULT_USERNAME): cv.string,
+        probatio.Required(probatio.Secret(CONF_PASSWORD)): cv.string,
+        probatio.Optional(CONF_FFMPEG_ARGUMENTS, default=DEFAULT_ARGUMENTS): cv.string,
     }
 )
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up a Xiaomi Camera."""
     _LOGGER.debug("Received configuration for model %s", config[CONF_MODEL])
     async_add_entities([XiaomiCamera(hass, config)])
@@ -65,10 +76,9 @@ class XiaomiCamera(Camera):
         self._extra_arguments = config.get(CONF_FFMPEG_ARGUMENTS)
         self._last_image = None
         self._last_url = None
-        self._manager = hass.data[DATA_FFMPEG]
+        self._manager = get_ffmpeg_manager(hass)
         self._name = config[CONF_NAME]
         self.host = config[CONF_HOST]
-        self.host.hass = hass
         self._model = config[CONF_MODEL]
         self.port = config[CONF_PORT]
         self.path = config[CONF_PATH]
@@ -76,16 +86,19 @@ class XiaomiCamera(Camera):
         self.passwd = config[CONF_PASSWORD]
 
     @property
+    @override
     def name(self):
         """Return the name of this camera."""
         return self._name
 
     @property
+    @override
     def brand(self):
         """Return the camera brand."""
         return DEFAULT_BRAND
 
     @property
+    @override
     def model(self):
         """Return the camera model."""
         return self._model
@@ -129,7 +142,7 @@ class XiaomiCamera(Camera):
 
         videos = [v for v in ftp.nlst() if ".tmp" not in v]
         if not videos:
-            _LOGGER.info('Video folder "%s" is empty; delaying', latest_dir)
+            _LOGGER.debug('Video folder "%s" is empty; delaying', latest_dir)
             return False
 
         if self._model == MODEL_XIAOFANG:
@@ -139,6 +152,7 @@ class XiaomiCamera(Camera):
 
         return f"ftp://{self.user}:{self.passwd}@{host}:{self.port}{ftp.pwd()}/{video}"
 
+    @override
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
@@ -146,6 +160,7 @@ class XiaomiCamera(Camera):
 
         try:
             host = self.host.async_render(parse_result=False)
+        # pylint: disable-next=home-assistant-action-swallowed-exception
         except TemplateError as exc:
             _LOGGER.error("Error parsing template %s: %s", self.host, exc)
             return self._last_image
@@ -163,6 +178,7 @@ class XiaomiCamera(Camera):
 
         return self._last_image
 
+    @override
     async def handle_async_mjpeg_stream(self, request):
         """Generate an HTTP MJPEG stream from the camera."""
 

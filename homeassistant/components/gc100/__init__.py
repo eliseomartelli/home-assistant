@@ -1,31 +1,35 @@
 """Support for controlling Global Cache gc100."""
+
 import gc100
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import CONF_HOST, CONF_PORT, EVENT_HOMEASSISTANT_STOP
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.typing import ConfigType
+from homeassistant.util.hass_dict import HassKey
 
 CONF_PORTS = "ports"
 
 DEFAULT_PORT = 4998
 DOMAIN = "gc100"
 
-DATA_GC100 = "gc100"
+DATA_GC100: HassKey[GC100Device] = HassKey("gc100")
 
-CONFIG_SCHEMA = vol.Schema(
+CONFIG_SCHEMA = probatio.Schema(
     {
-        DOMAIN: vol.Schema(
+        DOMAIN: probatio.Schema(
             {
-                vol.Required(CONF_HOST): cv.string,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
+                probatio.Required(CONF_HOST): cv.string,
+                probatio.Optional(CONF_PORT, default=DEFAULT_PORT): probatio.Port(),
             }
         )
     },
-    extra=vol.ALLOW_EXTRA,
+    extra=probatio.ALLOW_EXTRA,
 )
 
 
-def setup(hass, base_config):
+def setup(hass: HomeAssistant, base_config: ConfigType) -> bool:
     """Set up the gc100 component."""
     config = base_config[DOMAIN]
     host = config[CONF_HOST]

@@ -1,8 +1,25 @@
 {
+  "exceptions": {
+    "failed_to_reload": {
+      "message": "Failed to reload dashboard resources. Please check your configuration and try again."
+    },
+    "resources_not_yaml_mode": {
+      "message": "Dashboard resources can only be reloaded when they are configured in YAML."
+    },
+    "url_already_exists": {
+      "message": "The URL \"{url}\" is already in use. Please choose a different one."
+    }
+  },
+  "services": {
+    "reload_resources": {
+      "description": "Reloads dashboard resources from the YAML-configuration.",
+      "name": "Reload dashboard resources"
+    }
+  },
   "system_health": {
     "info": {
       "dashboards": "Dashboards",
-      "mode": "Mode",
+      "mode": "[%key:common::config_flow::data::mode%]",
       "resources": "Resources",
       "views": "Views"
     }
